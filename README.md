@@ -41,7 +41,7 @@ Music collections are usually browsed by metadata or whole-track similarity, whi
 
 ## Tools and Technologies
 
-- **Source separation:** Demucs (<https://github.com/adefossez/demucs>), a pretrained model used as is (no training), with the default four-stem output (vocals, drums, bass, other)
+- **Source separation:** Demucs (<https://github.com/adefossez/demucs>), a pretrained model used as is (no training), with the six-stem output (vocals, drums, bass, guitar, piano, other)
 - **Python:** librosa, mir_eval, scikit-learn, umap-learn
 - **Embeddings:** pooled chroma/MFCC statistics per stem and per song; a pretrained model (MERT or musicnn) is an optional extension
 - Kadenze course notebooks (clustering and visualization) as baseline code
