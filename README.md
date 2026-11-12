@@ -79,24 +79,24 @@ Tools and data: librosa (McFee et al., 2015), mir_eval (Raffel et al., 2014), FM
 
 ### Objective 1: Implement an automatic source separation and component analysis pipeline
 
-- **PI1 (basic):** Load and preprocess audio, separate each song into stems (vocals, drums, bass, other) with a pretrained Demucs model, and cache the stems on disk
-- **PI2 (basic):** Extract beat-synchronous chroma and MFCC features for each stem and pool them into one embedding per stem
-- **PI3 (expected):** Run the pipeline on the FMA subset, check separation quality by listening on a sample of tracks across genres (including electronic music) and document failure cases, and compare chroma, MFCC and their combination as stem descriptors while recording processing time per song
-- **PI4 (advanced):** Compute self-similarity matrices and detect segment boundaries by novelty peak picking, and evaluate boundary F-measure (0.5 s and 3 s tolerance) with mir_eval on the Harmonix Set (tracks with usable YouTube audio), so that a component can be selected within a section of a song
+- [ ] **PI1 (basic):** Load and preprocess audio, separate each song into stems (vocals, drums, bass, other) with a pretrained Demucs model, and cache the stems on disk
+- [ ] **PI2 (basic):** Extract beat-synchronous chroma and MFCC features for each stem and pool them into one embedding per stem
+- [ ] **PI3 (expected):** Run the pipeline on the FMA subset, check separation quality by listening on a sample of tracks across genres (including electronic music) and document failure cases, and compare chroma, MFCC and their combination as stem descriptors while recording processing time per song
+- [ ] **PI4 (advanced):** Compute self-similarity matrices and detect segment boundaries by novelty peak picking, and evaluate boundary F-measure (0.5 s and 3 s tolerance) with mir_eval on the Harmonix Set (tracks with usable YouTube audio), so that a component can be selected within a section of a song
 
 ### Objective 2: Develop song-level and component-level similarity search
 
-- **PI1 (basic):** Compute a song-level embedding and nearest-neighbour search over the FMA subset, plus a UMAP map of the collection
-- **PI2 (basic):** Index the embedding of every stem, and search for the nearest stems of the same type (for example, drums to drums)
-- **PI3 (expected):** Evaluate component-level retrieval with precision@k against genre labels for each stem type, and compare it with a full-mix baseline
-- **PI4 (advanced):** Restrict component search to a time segment by embedding a stem within a detected segment, add structural attributes (segment duration, relative position), and evaluate precision@k against annotated section labels on Harmonix
+- [ ] **PI1 (basic):** Compute a song-level embedding and nearest-neighbour search over the FMA subset, plus a UMAP map of the collection
+- [ ] **PI2 (basic):** Index the embedding of every stem, and search for the nearest stems of the same type (for example, drums to drums)
+- [ ] **PI3 (expected):** Evaluate component-level retrieval with precision@k against genre labels for each stem type, and compare it with a full-mix baseline
+- [ ] **PI4 (advanced):** Restrict component search to a time segment by embedding a stem within a detected segment, add structural attributes (segment duration, relative position), and evaluate precision@k against annotated section labels on Harmonix
 
 ### Objective 3: Build an interactive component-browsing interface
 
-- **PI1 (basic):** Create a web app that accepts an uploaded song, separates it into stems, and displays the waveform of the full mix and of each stem
-- **PI2 (basic):** Add playback of each isolated stem and of the full mix, so the user can listen to every component
-- **PI3 (expected):** Implement component selection that returns the nearest songs with a similar component, shown on the 2D map with audio preview of the matched component
-- **PI4 (advanced):** Display the self-similarity matrix and a colour-coded segment timeline, let the user select a component within a segment, and return songs with a similar component, with the matched segment highlighted and playable
+- [ ] **PI1 (basic):** Create a web app that accepts an uploaded song, separates it into stems, and displays the waveform of the full mix and of each stem
+- [ ] **PI2 (basic):** Add playback of each isolated stem and of the full mix, so the user can listen to every component
+- [ ] **PI3 (expected):** Implement component selection that returns the nearest songs with a similar component, shown on the 2D map with audio preview of the matched component
+- [ ] **PI4 (advanced):** Display the self-similarity matrix and a colour-coded segment timeline, let the user select a component within a segment, and return songs with a similar component, with the matched segment highlighted and playable
 
 ## References
 
