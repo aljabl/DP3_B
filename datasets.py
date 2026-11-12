@@ -112,6 +112,21 @@ def harmonix_download(threshold: float = 0.95, sleep: float = 5.0, limit: int = 
         time.sleep(sleep)
 
 # --- FMA ---
-
 def fma_tracks(fma_root: Path) -> list:
-    return []
+    """FMA small subset with top-level genre as label.
+
+    Expects the standard layout: <fma_root>/fma_metadata/tracks.csv and
+    <fma_root>/fma_small/<first 3 digits>/<6-digit track id>.mp3
+    """
+    tracks = pd.read_csv(fma_root / "fma_metadata" / "tracks.csv", index_col=0, header=[0, 1, 2])
+    small = tracks[tracks[("set", "subset")] == "small"]
+    out = []
+
+    for tid, genre in small[("track", "genre_top")].items():
+        name = f"{tid:06d}"
+        path = fma_root / "fma_small" / name[:3] / f"{name}.mp3"
+
+        if path.exists():
+            out.append(Track(str(tid), path, genre))
+
+    return out
