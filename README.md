@@ -80,7 +80,7 @@ Tools and data: librosa (McFee et al., 2015), mir_eval (Raffel et al., 2014), FM
 ### Objective 1: Implement an automatic source separation and component analysis pipeline
 
 - [x] **PI1 (basic):** Load and preprocess audio, separate each song into stems (vocals, drums, bass, other) with a pretrained Demucs model, and cache the stems on disk
-- [ ] **PI2 (basic):** Extract beat-synchronous chroma and MFCC features for each stem and pool them into one embedding per stem
+- [x] **PI2 (basic):** Extract beat-synchronous chroma and MFCC features for each stem and pool them into one embedding per stem
 - [ ] **PI3 (expected):** Run the pipeline on the FMA subset, check separation quality by listening on a sample of tracks across genres (including electronic music) and document failure cases, and compare chroma, MFCC and their combination as stem descriptors while recording processing time per song
 - [ ] **PI4 (advanced):** Compute self-similarity matrices and detect segment boundaries by novelty peak picking, and evaluate boundary F-measure (0.5 s and 3 s tolerance) with mir_eval on the Harmonix Set (tracks with usable YouTube audio), so that a component can be selected within a section of a song
 

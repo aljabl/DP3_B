@@ -17,10 +17,14 @@ from pathlib import Path
 
 from datasets import harmonix_download, get_tracks
 from dp3 import config
-from dp3.cache import Cache, StemCache, RunLog
+from dp3.cache import Cache, StemCache, FeatureCache, RunLog
 from dp3.separation import StemSeparator
+from dp3.features import FeatureExtractor, load_mono
 
 SEPARATION_COLUMNS = ["file_id", "status", "time_s", "residual", "error"]
+EXTRACTION_COLUMNS = ["file_id", "status", "time_s", "tempo", "n_beats", "n_stems_ok",
+                      "n_stems_silent", "beat_time_s", "stems_time_s", "error"]
+DATASET_COLUMNS = ["dataset", "track_id", "stem", "status", "rms_db", "row"]
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -82,16 +86,35 @@ def stage_separate(tracks, dataset: str):
         return
 
     separator = StemSeparator()
- 
+
     def process(track):
         stems, residual = separator.separate(track.path)
         cache.save(track.file_id, stems, separator.sample_rate)
         return {"residual": round(residual, 4)}
- 
+
     run_stage(tracks, cache, RunLog(cache.root / "separation_log.csv", SEPARATION_COLUMNS), process)
 
 def stage_extract(tracks, dataset:str):
-    None
+    stems_cache = StemCache(config.stems_dir(dataset))
+    cache = FeatureCache(config.features_dir(dataset))
+    extractor = FeatureExtractor()
+
+    def process(track):
+        if not stems_cache.has(track.file_id):
+            raise FileNotFoundError("stems not found (run the separate stage first)")
+
+        mix = load_mono(track.path)
+        stems = {name: load_mono(p) for name, p in stems_cache.paths(track.file_id).items()}
+        result = extractor.analyze(mix, stems)
+        cache.save(track.file_id, result)
+        statuses = [s["status"] for s in result["stems"].values()]
+
+        return {"tempo": round(result["tempo"], 1), "n_beats": result["n_beats"],
+                "n_stems_ok": statuses.count("ok"), "n_stems_silent": statuses.count("silent"),
+                "beat_time_s": round(result["beat_time_s"], 2),
+                "stems_time_s": round(result["stems_time_s"], 2)}
+
+    run_stage(tracks, cache, RunLog(cache.root / "features_log.csv", EXTRACTION_COLUMNS), process)
 
 def stage_table():
     None
