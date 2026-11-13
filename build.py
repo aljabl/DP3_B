@@ -1,8 +1,8 @@
 """Offline index build: download -> separate -> extract -> table, for one dataset.
- 
+
     python build.py --dataset harmonix --stage all
     python build.py --dataset harmonix --stage extract --limit 3
- 
+
 Every stage skips tracks that are already cached, so an interrupted run can
 simply be started again.
 """
@@ -107,13 +107,13 @@ def main():
     p.add_argument("--cookies-browser", default="firefox", help="e.g. chrome, firefox, safari, edge") # required for youtube downloads
     p.add_argument("--cookies-file", default=None, help="Netscape-format cookies.txt")
     args = p.parse_args()
- 
+
     stages = ["download", "separate", "extract", "table"] if args.stage == "all" else [args.stage]
- 
+
     if "download" in stages and args.dataset == "harmonix":
         harmonix_download(args.threshold, args.sleep, args.limit,
                           args.cookies_browser, args.cookies_file)
- 
+
     if "separate" in stages or "extract" in stages:
         tracks = get_tracks(args.dataset, args.limit)
         print(f"{len(tracks)} tracks")
@@ -123,12 +123,12 @@ def main():
 
         if "extract" in stages:
             stage_extract(tracks, args.dataset)
- 
+
     if "table" in stages:
         stage_table()
 
     print("Done.")
- 
- 
+
+
 if __name__ == "__main__":
     main()
