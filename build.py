@@ -9,8 +9,11 @@ simply be started again.
 
 import argparse
 import time
+import traceback
 import numpy as np
 import pandas as pd
+
+from pathlib import Path
 
 from datasets import harmonix_download, get_tracks
 from dp3 import config
@@ -19,6 +22,29 @@ from dp3.separation import StemSeparator
 
 SEPARATION_COLUMNS = ["file_id", "status", "time_s", "residual", "error"]
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def describe_error(e: Exception) -> str:
+    """One-line description: exception type, message, and where it was raised.
+
+    Locations read "folder/file.py:LINE in function". If the error was raised inside
+    a library (e.g. demucs/apply.py), the innermost frame from this project that led
+    there is added as "called from ...".
+    """
+    frames = traceback.extract_tb(e.__traceback__)
+
+    def fmt(f):
+        return f"{'/'.join(Path(f.filename).parts[-2:])}:{f.lineno} in {f.name}"
+
+    where = fmt(frames[-1])                                  # innermost frame
+    ours = [f for f in frames if Path(f.filename).resolve().is_relative_to(PROJECT_ROOT)]
+
+    if ours and ours[-1] is not frames[-1]:
+        where += f", called from {fmt(ours[-1])}"
+
+    message = str(e).replace("\n", " ")[:200]
+    return f"{type(e).__name__}: {message} [{where}]"
 
 def run_stage(tracks, cache: Cache, log: RunLog, process):
     """Skip cached tracks; for the rest call process(track) -> dict of log fields.
@@ -39,7 +65,7 @@ def run_stage(tracks, cache: Cache, log: RunLog, process):
 
         except Exception as e:
             # Log and skip failed track
-            error = str(e).replace("\n", " ")[:200]
+            error = describe_error(e)
             print(f"  FAILED {track.file_id}: {error}")
             log.add(file_id=track.file_id, status="failed", error=error)
             continue
