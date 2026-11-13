@@ -22,14 +22,12 @@ HARMONIX_BASE = "https://raw.githubusercontent.com/urinieto/harmonixset/main/dat
 DOWNLOAD_LOG_COLUMNS = ["file_id", "url", "score", "status", "error"]
 
 
-def get_tracks(dataset: str, fma_root: str = None, limit: int = None) -> list:
+def get_tracks(dataset: str, limit: int = None) -> list:
     if dataset == "harmonix":
-        tracks = harmonix_tracks()
+        tracks = harmonix_tracks(limit)
 
     elif dataset == "fma":
-        if fma_root is None:
-            raise SystemExit("--fma-root is required for the fma dataset")
-        tracks = fma_tracks(Path(fma_root))
+        tracks = fma_tracks(limit)
 
     else:
         raise SystemExit(f"unknown dataset: {dataset}")
@@ -38,11 +36,17 @@ def get_tracks(dataset: str, fma_root: str = None, limit: int = None) -> list:
 
 
 # --- Harmonix ---
-def harmonix_tracks() -> list:
+def harmonix_tracks(limit:int = None) -> list:
     """Tracks whose audio has been downloaded (data/audio/harmonix/<file_id>.wav)."""
 
-    return [Track(p.stem, p, None) for p in sorted(config.audio_dir("harmonix").glob("*.wav"))]
+    out = []
+    for track in sorted(config.audio_dir("harmonix").glob("*.wav")):
+        out.append(Track(track.stem, track, None))
 
+        if limit and len(out) >= limit:
+            break
+
+    return out
 
 def _fetch_csv(url: str) -> pd.DataFrame:
     with urllib.request.urlopen(url) as r:
@@ -112,21 +116,35 @@ def harmonix_download(threshold: float = 0.95, sleep: float = 5.0, limit: int = 
         time.sleep(sleep)
 
 # --- FMA ---
-def fma_tracks(fma_root: Path) -> list:
+def fma_tracks(limit:int = None) -> list:
     """FMA small subset with top-level genre as label.
 
     Expects the standard layout: <fma_root>/fma_metadata/tracks.csv and
     <fma_root>/fma_small/<first 3 digits>/<6-digit track id>.mp3
     """
-    tracks = pd.read_csv(fma_root / "fma_metadata" / "tracks.csv", index_col=0, header=[0, 1, 2])
+    fma_root = config.audio_dir("fma")
+    if not fma_root.exists():
+        raise SystemExit(f"FMA dataset does not exist at {fma_root}")
+
+    tracks = pd.read_csv(fma_root / "fma_metadata" / "tracks.csv", index_col=0, header=[0, 1])
     small = tracks[tracks[("set", "subset")] == "small"]
+    rows = zip(small.index, small[("track", "genre_top")], small[("track", "title")])
+    
     out = []
+    for tid, genre, title in rows:
+        padded_tid = f"{tid:06d}"
+        print(padded_tid)
+        path = fma_root / "fma_small" / padded_tid[:3] / f"{padded_tid}.mp3"
 
-    for tid, genre in small[("track", "genre_top")].items():
-        name = f"{tid:06d}"
-        path = fma_root / "fma_small" / name[:3] / f"{name}.mp3"
+        if not path.exists():
+            continue
 
-        if path.exists():
-            out.append(Track(str(tid), path, genre))
+        # Include the track's title in the file_id (match harmonix dataset format)
+        # <track_num>_<title>
+        file_id = f"{padded_tid}_{title.replace(" ","")}"
+        out.append(Track(file_id, path, genre))
+
+        if limit and len(out) >= limit:
+            break
 
     return out

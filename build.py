@@ -77,7 +77,6 @@ def main():
     p.add_argument("--stage", choices=["download", "separate", "extract", "table", "all"],
                    default="all", help="'all' = download (harmonix only) + separate + extract + table")
     p.add_argument("--limit", type=int, default=None, help="only first N tracks (for testing)")
-    p.add_argument("--fma-root", default="fma/", help="folder containing fma_metadata/ and fma_small/")
     p.add_argument("--threshold", type=float, default=0.95, help="harmonix alignment score cutoff")
     p.add_argument("--sleep", type=float, default=5.0, help="seconds between harmonix downloads")
     p.add_argument("--cookies-browser", default="firefox", help="e.g. chrome, firefox, safari, edge") # required for youtube downloads
@@ -91,7 +90,7 @@ def main():
                           args.cookies_browser, args.cookies_file)
  
     if "separate" in stages or "extract" in stages:
-        tracks = get_tracks(args.dataset, args.fma_root, args.limit)
+        tracks = get_tracks(args.dataset, args.limit)
         print(f"{len(tracks)} tracks")
 
         if "separate" in stages:
