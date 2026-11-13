@@ -59,8 +59,7 @@ def stage_separate(tracks, dataset: str):
  
     def process(track):
         stems, residual = separator.separate(track.path)
-        cache.save(track.file_id, {name: a.numpy() for name, a in stems.items()},
-                   separator.sample_rate)
+        cache.save(track.file_id, stems, separator.sample_rate)
         return {"residual": round(residual, 4)}
  
     run_stage(tracks, cache, RunLog(cache.root / "separation_log.csv", SEPARATION_COLUMNS), process)

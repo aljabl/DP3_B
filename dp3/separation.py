@@ -25,7 +25,7 @@ class StemSeparator:
     def separate_array(self, audio: np.ndarray, sr: int) -> tuple:
         """Separate in-memory audio shaped (channels, samples) at sample rate sr.
  
-        Returns (stems, residual): stems maps name -> tensor (channels, samples)
+        Returns (stems, residual): stems maps name -> Numpy array (channels, samples)
         at self.sample_rate, and residual is the relative reconstruction error
         (0 if the stems sum exactly to the mix).
         """
@@ -48,8 +48,8 @@ class StemSeparator:
         # If separation is perfect, adding the stems together results in the original mix (residual = 0). 
         residual = ((sources.sum(0) - mix).norm() / mix.norm()).item()
 
-
-        return dict(zip(self.model.sources, self._prevent_clipping(sources))), residual
+        sources = self._prevent_clipping(sources).numpy()
+        return dict(zip(self.model.sources, sources)), residual
 
     @staticmethod
     def _prevent_clipping(sources: torch.Tensor) -> torch.Tensor:

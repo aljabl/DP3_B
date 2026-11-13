@@ -5,6 +5,8 @@ Atomic folder cache and CSV run log, shared by every stage.
 import csv
 import shutil
 import soundfile as sf
+import numpy as np
+
 from contextlib import contextmanager
 from pathlib import Path
  
@@ -47,6 +49,7 @@ class StemCache(Cache):
     def save(self, key: str, stems: dict, sample_rate: int):
         with self.write(key) as folder:
             for name, audio in stems.items():
+                # sf expects shape (frames, channels), but audio is of shape (channels, samples)
                 sf.write(folder / f"{name}.flac", np.asarray(audio).T, sample_rate, subtype="PCM_16")
  
     def paths(self, key: str) -> dict:
