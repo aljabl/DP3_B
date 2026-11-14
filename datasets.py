@@ -131,7 +131,7 @@ def fma_tracks(limit:int = None) -> list:
 
     out = []
     for tid, genre, title in rows:
-        print(padded_tid)
+        padded_tid = f"{tid:06d}"
         path = fma_root / "fma_small" / padded_tid[:3] / f"{padded_tid}.mp3"
 
         if not path.exists():
