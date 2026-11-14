@@ -181,7 +181,7 @@ def stage_timing(dataset: str):
     songs["total_s"] = songs.sum(axis=1)
 
     config.INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    songs.to_csv(config.INDEX_DIR / "timing_per_song.csv")
+    songs.to_csv(config.INDEX_DIR / f"timing_per_song_{dataset}.csv")
 
     print(songs.describe(percentiles=[0.5, 0.9]).round(2).T)
     chroma, mfcc = songs["chroma_time_s"].mean(), songs["mfcc_time_s"].mean()
