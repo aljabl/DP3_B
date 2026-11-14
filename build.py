@@ -117,7 +117,46 @@ def stage_extract(tracks, dataset:str):
     run_stage(tracks, cache, RunLog(cache.root / "features_log.csv", EXTRACTION_COLUMNS), process)
 
 def stage_table():
-    None
+    """Collect the pooled vectors of every dataset under data/features into one table:
+    data/index/embeddings_index.csv (dataset, track_id, stem, status, rms_db, row) and
+    data/index/embeddings.npz (chroma, mfcc; `row` indexes into them, -1 for silent stems).
+    Vectors are stored raw: standardizing / combining them is done when the search index is built."""
+
+    rows, chroma, mfcc = [], [], []
+    features_root = config.DATA / "features"
+
+    if not features_root.exists():
+        raise SystemExit("table: no features found (run the extract stage first)")
+
+    for dataset_dir in sorted(p for p in features_root.iterdir() if p.is_dir()):
+        cache = FeatureCache(dataset_dir)
+
+        for track_id in cache.keys():
+            try:
+                result = cache.load(track_id)
+            except (FileNotFoundError):
+                print(f"load: file {track_id} not found")
+                continue
+
+            for stem, s in result["stems"].items():
+                row = {"dataset": dataset_dir.name, "track_id": track_id, "stem": stem,
+                       "status": s["status"], "rms_db": s["rms_db"], "row": -1}
+                if s["status"] == "ok":
+
+                    row["row"] = len(chroma)
+                    chroma.append(s["chroma"])
+                    mfcc.append(s["mfcc"])
+
+                rows.append(row)
+
+    config.INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows, columns=DATASET_COLUMNS).to_csv(config.INDEX_DIR / "embeddings_index.csv", index=False)
+    np.savez_compressed(
+        config.INDEX_DIR / "embeddings.npz",
+        chroma=np.stack(chroma) if chroma else np.empty((0, config.CHROMA_DIM), np.float32),
+        mfcc=np.stack(mfcc) if mfcc else np.empty((0, config.MFCC_DIM), np.float32))
+
+    print(f"table: {len(rows)} stem rows ({len(chroma)} ok) -> {config.INDEX_DIR}")
 
 def main():
     p = argparse.ArgumentParser()
