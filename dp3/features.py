@@ -103,7 +103,8 @@ class FeatureExtractor:
                 continue
 
             # Turn stem into beat-level chroma and MFCC values, plus pooled vectors
-            chroma_b, mfcc_b = self.beat_features(y, frames)
+            chroma_b = self.chroma_beats(y, frames)
+            mfcc_b = self.mfcc_beats(y, frames)
             out[name] = {"status": "ok", "rms_db": db,
                          "chroma_beat": chroma_b.astype(np.float32),
                          "mfcc_beat": mfcc_b.astype(np.float32),
@@ -115,25 +116,39 @@ class FeatureExtractor:
                 "beat_time_s": beat_time, "stems_time_s": stems_time, "stems": out}
 
     @staticmethod
-    def beat_features(stem: np.ndarray, beat_frames: np.ndarray):
+    def chroma_beats(stem: np.ndarray, beat_frames: np.ndarray) -> np.ndarray:
         """
-        Computes beat-synchronous (chroma, mfcc), shaped (12, n) and
-        (N_MFCC - 1, n).
+        Beat-synchronous chroma, shaped (12, n). Uses the median per beat
+        (control for outliers).
 
-        Averages each beat features between consecutive beats, so we get one
-        feature column per beat. We use the median for chroma (control for
-        outliers) and mean for MFCC.
+        Averages the feature between consecutive beats, so we get one
+        feature column per beat.
 
         librosa.util.sync pads the boundaries with the start and end of the
         audio, so n = n_beats + 1 and the material before the first / after the
         last beat is kept.
         """
+
         chroma = librosa.feature.chroma_cqt(y=stem, sr=config.ANALYSIS_SR, hop_length=config.HOP)
+        return librosa.util.sync(chroma, beat_frames, aggregate=np.median)
+
+    @staticmethod
+    def mfcc_beats(stem: np.ndarray, beat_frames: np.ndarray) -> np.ndarray:
+        """
+        Beat-synchronous MFCC without the 0th coefficient, shaped (N_MFCC - 1, n).
+        Uses the mean per beat.
+
+        Averages the feature between consecutive beats, so we get one
+        feature column per beat.
+
+        librosa.util.sync pads the boundaries with the start and end of the
+        audio, so n = n_beats + 1 and the material before the first / after the
+        last beat is kept.
+        """
+
         mfcc = librosa.feature.mfcc(y=stem, sr=config.ANALYSIS_SR, hop_length=config.HOP,
                                     n_mfcc=config.N_MFCC)[1:]
-
-        return (librosa.util.sync(chroma, beat_frames, aggregate=np.median),
-                librosa.util.sync(mfcc, beat_frames, aggregate=np.mean))
+        return librosa.util.sync(mfcc, beat_frames, aggregate=np.mean)
 
     @staticmethod
     def _rms(y: np.ndarray) -> float:
