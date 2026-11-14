@@ -23,25 +23,24 @@ DOWNLOAD_LOG_COLUMNS = ["file_id", "url", "score", "status", "error"]
 
 
 def get_tracks(dataset: str, limit: int = None) -> list:
-    if dataset == "harmonix":
-        tracks = harmonix_tracks(limit)
-
-    elif dataset == "fma":
+    if dataset == "fma":
         tracks = fma_tracks(limit)
 
     else:
-        raise SystemExit(f"unknown dataset: {dataset}")
+        try:
+            tracks = downloaded_tracks(dataset, limit)
+        except (FileNotFoundError):
+            raise SystemExit(f"unknown dataset: {dataset}")
 
     return tracks[:limit] if limit else tracks
 
-
-# --- Harmonix ---
-def harmonix_tracks(limit:int = None) -> list:
-    """Tracks whose audio has been downloaded (data/audio/harmonix/<file_id>.wav)."""
+def downloaded_tracks(dataset:str, limit:int = None) -> list:
+    """Tracks whos audio has been downloaded (data/audio/<dataset>/<file_id>.wav."""
 
     out = []
-    for track in sorted(config.audio_dir("harmonix").glob("*.wav")):
-        out.append(Track(track.stem, track, None))
+    for track in sorted(config.audio_dir(dataset).glob("*.wav")):
+        track = Track((track.stem).replace(" ", ""), track, None)
+        out.append(track)
 
         if limit and len(out) >= limit:
             break

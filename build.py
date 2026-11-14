@@ -160,7 +160,7 @@ def stage_table():
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--dataset", choices=["harmonix", "fma"], default="harmonix")
+    p.add_argument("--dataset", choices=["harmonix", "fma", "previews"], default="harmonix")
     p.add_argument("--stage", choices=["download", "separate", "extract", "table", "all"],
                    default="all", help="'all' = download (harmonix only) + separate + extract + table")
     p.add_argument("--limit", type=int, default=None, help="only first N tracks (for testing)")
