@@ -129,10 +129,9 @@ def fma_tracks(limit:int = None) -> list:
     tracks = pd.read_csv(fma_root / "fma_metadata" / "tracks.csv", index_col=0, header=[0, 1])
     small = tracks[tracks[("set", "subset")] == "small"]
     rows = zip(small.index, small[("track", "genre_top")], small[("track", "title")])
-    
+
     out = []
     for tid, genre, title in rows:
-        padded_tid = f"{tid:06d}"
         print(padded_tid)
         path = fma_root / "fma_small" / padded_tid[:3] / f"{padded_tid}.mp3"
 
