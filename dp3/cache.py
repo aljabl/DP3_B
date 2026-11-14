@@ -46,7 +46,7 @@ class Cache:
 
 class StemCache(Cache):
     """Stems of each track as <root>/<file_id>/<stem>.flac (16-bit)."""
- 
+
     def save(self, key: str, stems: dict, sample_rate: int):
         with self.write(key) as folder:
             for name, audio in stems.items():
@@ -85,8 +85,8 @@ class FeatureCache(Cache):
 
     def load(self, key: str) -> dict:
         folder = self.path(key)
-        meta = json.loads((folder).read_text())
-        data = np.load(folder)
+        meta = json.loads((folder / "meta.json").read_text())
+        data = np.load(folder / "features.npz")
         stems = {}
 
         for name, info in meta["stems"].items():
