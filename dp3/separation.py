@@ -12,7 +12,7 @@ class StemSeparator:
     """Wrapper for a pretrained Demucs model (default is the 6-stem model). Takes an audio file as input, returns named stems."""
 
     def __init__(self, model_name:str = config.SEPARATION_MODEL):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "mps"
         self.model = get_model(model_name).to(self.device).eval()
         self.sample_rate = self.model.samplerate
 
