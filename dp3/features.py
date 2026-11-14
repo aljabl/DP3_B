@@ -92,6 +92,9 @@ class FeatureExtractor:
         beat_time = time.perf_counter() - t0
 
         t0 = time.perf_counter()
+        chroma_time = 0.0
+        mfcc_time = 0.0
+
         out = {}
 
         for name, y in stems.items():
@@ -103,8 +106,12 @@ class FeatureExtractor:
                 continue
 
             # Turn stem into beat-level chroma and MFCC values, plus pooled vectors
-            chroma_b = self.chroma_beats(y, frames)
-            mfcc_b = self.mfcc_beats(y, frames)
+            chroma_b, chroma_s = self._timed(self.chroma_beats, y, frames)
+            mfcc_b, mfcc_s = self._timed(self.mfcc_beats, y, frames)
+
+            chroma_time += chroma_s
+            mfcc_time += mfcc_s
+
             out[name] = {"status": "ok", "rms_db": db,
                          "chroma_beat": chroma_b.astype(np.float32),
                          "mfcc_beat": mfcc_b.astype(np.float32),
@@ -113,7 +120,16 @@ class FeatureExtractor:
         stems_time = time.perf_counter() - t0
 
         return {"tempo": tempo, "beat_times": times, "n_beats": int(len(frames)),
-                "beat_time_s": beat_time, "stems_time_s": stems_time, "stems": out}
+                "beat_time_s": beat_time, "stems_time_s": stems_time,
+                "chroma_time_s": chroma_time, "mfcc_time_s": mfcc_time, "stems": out}
+
+    @staticmethod
+    def _timed(func, *args) -> tuple:
+        """Calls func(*args) and returns (result, elapsed seconds)."""
+
+        start = time.perf_counter()
+        result = func(*args)
+        return result, time.perf_counter() - start
 
     @staticmethod
     def chroma_beats(stem: np.ndarray, beat_frames: np.ndarray) -> np.ndarray:
