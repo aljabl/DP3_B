@@ -1,4 +1,4 @@
-# DP3 - Component-Aware Browsing of Musi# Component-Aware Browsing of Music
+# DP3 - Component-Aware Browsing of Music
 
 **Alexandra Blais**
 
