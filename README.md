@@ -4,6 +4,14 @@
 
 ---
 
+## Run the interface
+
+Install the interface dependency with `py -m pip install -r requirements-app.txt`,
+then start the app from this directory with `py stem_similarity_search.py`.
+On macOS or Linux, use `python3` in place of `py`.
+
+---
+
 ## ABSTRACT
 
 Music collections are usually browsed by metadata or whole-track similarity, which treats a song as a single mixed sound. This project builds a tool for browsing music by its individual components: a 30-second excerpt is separated into stems (vocals, drums, bass, guitar, piano, and other) with a pretrained Demucs model, and the user selects one stem to find songs containing a similar component. This report describes the current status. The separation and beat-synchronous feature pipeline is implemented and is being run on a genre-balanced subset of FMA and on up to about 1,000 chart-topping song previews. A first blind listening test comparing chroma, MFCC, and combined descriptors showed that "similarity" is not one quantity: raters weigh timbre, notes, and timing differently. We therefore define similarity per perceptual facet (timbre, notes/harmony, rhythm). Given the scope change and deadline, structure-based browsing is moved to future work, and evaluation is a single-rater listening pilot supported by objective diagnostics.
