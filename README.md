@@ -9,6 +9,9 @@
 Install the interface dependency with `py -m pip install -r requirements-app.txt`,
 then start the app from this directory with `py stem_similarity_search.py`.
 On macOS or Linux, use `python3` in place of `py`.
+The interface keeps uploaded WAV/MP3 files and their 30-second clips in session
+memory. Files shorter than 30 seconds cannot be cropped; longer files require
+you to choose and save a 30-second crop.
 
 ---
 

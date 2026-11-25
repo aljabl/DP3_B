@@ -1,1 +1,2 @@
 streamlit>=1.54,<2
+soundfile>=0.13,<1
