@@ -4,6 +4,7 @@ from hashlib import sha256
 
 import streamlit as st
 
+from dp3.search import SimilarityIndex, SearchResult, query_descriptors
 from dp3.stem_service import STEM_NAMES, load_or_separate, stem_cache_key
 from dp3.upload import (
     CLIP_SECONDS,
@@ -22,6 +23,12 @@ def get_separator():
     from dp3.separation import StemSeparator
 
     return StemSeparator()
+
+
+@st.cache_resource
+def get_similarity_index() -> SimilarityIndex:
+    """Read the offline embeddings once for all app reruns."""
+    return SimilarityIndex.load()
 
 
 def add_uploads(uploads: dict[str, UploadedAudio]) -> list[str]:
@@ -95,6 +102,39 @@ def show_stems(stems: dict[str, bytes]) -> None:
         st.audio(stems[name], format="audio/wav")
 
 
+def show_search_results(results: list[SearchResult]) -> None:
+    if not results:
+        st.warning("No playable matches were found in the saved index.")
+        return
+    st.subheader("Most similar songs")
+    for number, result in enumerate(results, 1):
+        st.markdown(f"### {number}. {result.title}")
+        st.caption(f"{result.dataset.upper()} · cosine similarity {result.similarity:.3f}")
+        st.write("Full song")
+        mix_format = "audio/mpeg" if result.mix_path.suffix.lower() == ".mp3" else "audio/wav"
+        st.audio(str(result.mix_path), format=mix_format)
+        st.write(f"{result.stem.capitalize()} stem")
+        st.audio(str(result.stem_path), format="audio/flac")
+
+
+def show_search(upload: UploadedAudio, clip_key: str, stems: dict[str, bytes]) -> None:
+    st.subheader("Find similar stems")
+    selected_stem = st.selectbox("Stem to search", STEM_NAMES, key=f"search_stem_{clip_key}")
+    searches: dict[tuple[str, str], list[SearchResult]] = st.session_state.setdefault("search_results", {})
+    search_key = (clip_key, selected_stem)
+    if st.button("Find top 3 similar songs", key=f"search_button_{clip_key}"):
+        with st.spinner("Extracting stem features and searching the index..."):
+            try:
+                query = query_descriptors(upload.clip_bytes, stems[selected_stem], selected_stem)
+                searches[search_key] = get_similarity_index().search(
+                    selected_stem, query, upload=upload, limit=3
+                )
+            except Exception as exc:
+                st.error(f"Could not search this stem: {exc}")
+    if search_key in searches:
+        show_search_results(searches[search_key])
+
+
 def main() -> None:
     st.set_page_config(page_title="Stem Similarity Search")
     st.title("Stem Similarity Search")
@@ -121,9 +161,8 @@ def main() -> None:
 
     stem_results: dict[str, dict[str, bytes]] = st.session_state.setdefault("stem_results", {})
     key = stem_cache_key(selected_upload)
-    if key in stem_results:
-        show_stems(stem_results[key])
-    elif st.button("Separate into six stems", key=f"separate_{selected_id}"):
+    stems = stem_results.get(key)
+    if stems is None and st.button("Separate into six stems", key=f"separate_{selected_id}"):
         with st.spinner("Checking cached stems and running Demucs if needed..."):
             try:
                 stems, source = load_or_separate(selected_upload, stem_results, get_separator)
@@ -131,7 +170,9 @@ def main() -> None:
                 st.error(f"Could not separate this clip: {exc}")
             else:
                 st.success(f"Stems loaded from {source} and saved in session memory.")
-                show_stems(stems)
+    if stems is not None:
+        show_stems(stems)
+        show_search(selected_upload, key, stems)
 
 
 if __name__ == "__main__":

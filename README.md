@@ -15,6 +15,9 @@ shorter files cannot be cropped, and longer files require you to choose and
 save a 30-second crop.
 For audio separation, the app checks its session memory and matching stems in
 `data/stems/` before running Demucs. New stem results stay in session memory.
+After separation, select a stem and search the saved embeddings. The app shows
+the three closest playable songs, using the beat-synchronous chroma and MFCC
+descriptors in `dp3/features.py`.
 
 ---
 

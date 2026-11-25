@@ -1,6 +1,7 @@
 """Validate and crop uploaded audio without writing it to disk."""
 
 from dataclasses import dataclass
+from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
 
@@ -96,3 +97,17 @@ def whole_clip_audio(upload: UploadedAudio) -> bytes:
         return output.getvalue()
     except (sf.LibsndfileError, OSError) as exc:
         raise AudioUploadError("This file could not be decoded as audio.") from exc
+
+
+def source_matches_file(path: Path, upload: UploadedAudio) -> bool:
+    """Check source identity without loading an entire disk file into memory."""
+    try:
+        if not path.is_file() or path.stat().st_size != len(upload.source_bytes):
+            return False
+        digest = sha256()
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.digest() == sha256(upload.source_bytes).digest()
+    except OSError:
+        return False

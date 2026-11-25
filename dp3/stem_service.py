@@ -9,7 +9,7 @@ import numpy as np
 import soundfile as sf
 
 from . import config
-from .upload import CLIP_SECONDS, CLIP_TOLERANCE_SECONDS, UploadedAudio
+from .upload import CLIP_SECONDS, CLIP_TOLERANCE_SECONDS, UploadedAudio, source_matches_file
 
 
 STEM_NAMES = ("vocals", "drums", "bass", "guitar", "piano", "other")
@@ -53,19 +53,6 @@ def _read_disk_stems(folder: Path, expected_seconds: float) -> dict[str, bytes] 
         return None
 
 
-def _matches_uploaded_source(path: Path, upload: UploadedAudio) -> bool:
-    try:
-        if not path.is_file() or path.stat().st_size != len(upload.source_bytes):
-            return False
-        digest = sha256()
-        with path.open("rb") as source:
-            while chunk := source.read(1024 * 1024):
-                digest.update(chunk)
-        return digest.digest() == sha256(upload.source_bytes).digest()
-    except OSError:
-        return False
-
-
 def _existing_dataset_stems(upload: UploadedAudio, data_root: Path) -> dict[str, bytes] | None:
     # Dataset stems describe the whole source file. Reuse them only when the
     # selected clip is the entire, byte-identical dataset source.
@@ -86,7 +73,7 @@ def _existing_dataset_stems(upload: UploadedAudio, data_root: Path) -> dict[str,
             candidates.append((source, folder))
 
     for source, folder in candidates:
-        if _matches_uploaded_source(source, upload):
+        if source_matches_file(source, upload):
             cached = _read_disk_stems(folder, upload.duration_seconds)
             if cached is not None:
                 return cached
