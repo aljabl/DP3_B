@@ -30,10 +30,10 @@ class UploadTests(unittest.TestCase):
         self.assertFalse(app.exception)
         upload = next(iter(app.session_state["audio_uploads"].values()))
         self.assertIsNone(upload.clip_bytes)
-        self.assertEqual(len(app.button), 1)
+        self.assertTrue(any(button.label == "Save this 30-second crop" for button in app.button))
 
         app.slider[0].set_value(1.0).run()
-        app.button[0].click().run()
+        next(button for button in app.button if button.label == "Save this 30-second crop").click().run()
         self.assertFalse(app.exception)
         self.assertEqual(upload.clip_start_seconds, 1.0)
         with sf.SoundFile(BytesIO(upload.clip_bytes)) as clip:
