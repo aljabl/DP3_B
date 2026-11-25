@@ -66,6 +66,17 @@ class UploadTests(unittest.TestCase):
         with self.assertRaises(AudioUploadError):
             crop_audio(short, 0)
 
+    def test_preview_just_under_30_seconds_is_accepted(self) -> None:
+        output = BytesIO()
+        sf.write(output, np.zeros(30 * SAMPLE_RATE - 200), SAMPLE_RATE, format="WAV")
+        app = AppTest.from_file(str(APP_PATH)).run()
+        app.get("file_uploader")[0].upload("preview.wav", output.getvalue(), "audio/wav").run()
+
+        self.assertFalse(app.exception)
+        upload = next(iter(app.session_state["audio_uploads"].values()))
+        self.assertIsNotNone(upload.clip_bytes)
+        self.assertTrue(any(button.label == "Separate into six stems" for button in app.button))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ import soundfile as sf
 
 
 CLIP_SECONDS = 30
+CLIP_TOLERANCE_SECONDS = 0.1  # Account for encoder padding in 30-second previews.
 MIME_TYPES = {".wav": "audio/wav", ".mp3": "audio/mpeg"}
 
 
@@ -81,3 +82,17 @@ def crop_audio(upload: UploadedAudio, start_seconds: float) -> bytes:
         return output.getvalue()
     except (sf.LibsndfileError, OSError) as exc:
         raise AudioUploadError("The crop could not be decoded as audio.") from exc
+
+
+def whole_clip_audio(upload: UploadedAudio) -> bytes:
+    """Convert an already 30-second upload to playable WAV bytes."""
+    if abs(upload.duration_seconds - CLIP_SECONDS) > CLIP_TOLERANCE_SECONDS:
+        raise AudioUploadError("This file needs a 30-second crop.")
+    try:
+        with sf.SoundFile(_audio_buffer(upload.source_bytes, upload.name)) as audio:
+            samples = audio.read(dtype="float32", always_2d=True)
+        output = BytesIO()
+        sf.write(output, samples, upload.sample_rate, format="WAV", subtype="PCM_16")
+        return output.getvalue()
+    except (sf.LibsndfileError, OSError) as exc:
+        raise AudioUploadError("This file could not be decoded as audio.") from exc

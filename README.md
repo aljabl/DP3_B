@@ -10,8 +10,11 @@ Install the interface dependency with `py -m pip install -r requirements-app.txt
 then start the app from this directory with `py stem_similarity_search.py`.
 On macOS or Linux, use `python3` in place of `py`.
 The interface keeps uploaded WAV/MP3 files and their 30-second clips in session
-memory. Files shorter than 30 seconds cannot be cropped; longer files require
-you to choose and save a 30-second crop.
+memory. Files within 0.1 seconds of 30 seconds are accepted as complete;
+shorter files cannot be cropped, and longer files require you to choose and
+save a 30-second crop.
+For audio separation, the app checks its session memory and matching stems in
+`data/stems/` before running Demucs. New stem results stay in session memory.
 
 ---
 

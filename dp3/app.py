@@ -4,7 +4,24 @@ from hashlib import sha256
 
 import streamlit as st
 
-from dp3.upload import CLIP_SECONDS, AudioUploadError, UploadedAudio, crop_audio, inspect_audio
+from dp3.stem_service import STEM_NAMES, load_or_separate, stem_cache_key
+from dp3.upload import (
+    CLIP_SECONDS,
+    CLIP_TOLERANCE_SECONDS,
+    AudioUploadError,
+    UploadedAudio,
+    crop_audio,
+    inspect_audio,
+    whole_clip_audio,
+)
+
+
+@st.cache_resource
+def get_separator():
+    """Load Demucs once and share its read-only model between app reruns."""
+    from dp3.separation import StemSeparator
+
+    return StemSeparator()
 
 
 def add_uploads(uploads: dict[str, UploadedAudio]) -> list[str]:
@@ -23,8 +40,8 @@ def add_uploads(uploads: dict[str, UploadedAudio]) -> list[str]:
             continue
         try:
             upload = inspect_audio(file.name, data)
-            if upload.frames == CLIP_SECONDS * upload.sample_rate:
-                upload.clip_bytes = crop_audio(upload, 0)
+            if abs(upload.duration_seconds - CLIP_SECONDS) <= CLIP_TOLERANCE_SECONDS:
+                upload.clip_bytes = whole_clip_audio(upload)
                 upload.clip_start_seconds = 0.0
         except AudioUploadError as exc:
             st.error(f"{file.name}: {exc}")
@@ -40,11 +57,11 @@ def show_selected_audio(upload: UploadedAudio, audio_id: str) -> None:
     st.caption(f"Original audio · {upload.duration_seconds:.2f} seconds")
     st.audio(upload.source_bytes, format=upload.mime_type)
 
-    if upload.frames < CLIP_SECONDS * upload.sample_rate:
+    if upload.duration_seconds < CLIP_SECONDS - CLIP_TOLERANCE_SECONDS:
         st.warning("This file is shorter than 30 seconds. Upload a longer file to make a clip.")
         return
 
-    if upload.frames > CLIP_SECONDS * upload.sample_rate:
+    if upload.duration_seconds > CLIP_SECONDS + CLIP_TOLERANCE_SECONDS:
         max_start = (upload.frames - CLIP_SECONDS * upload.sample_rate) / upload.sample_rate
         start = st.slider(
             "Crop start (seconds)",
@@ -71,6 +88,13 @@ def show_selected_audio(upload: UploadedAudio, audio_id: str) -> None:
         st.audio(upload.clip_bytes, format="audio/wav")
 
 
+def show_stems(stems: dict[str, bytes]) -> None:
+    st.subheader("Separated stems")
+    for name in STEM_NAMES:
+        st.write(name.capitalize())
+        st.audio(stems[name], format="audio/wav")
+
+
 def main() -> None:
     st.set_page_config(page_title="Stem Similarity Search")
     st.title("Stem Similarity Search")
@@ -89,7 +113,25 @@ def main() -> None:
         format_func=lambda audio_id: f"{uploads[audio_id].name} ({uploads[audio_id].duration_seconds:.1f} s)",
         key="selected_audio_id",
     )
-    show_selected_audio(uploads[selected_id], selected_id)
+    selected_upload = uploads[selected_id]
+    show_selected_audio(selected_upload, selected_id)
+
+    if selected_upload.clip_bytes is None:
+        return
+
+    stem_results: dict[str, dict[str, bytes]] = st.session_state.setdefault("stem_results", {})
+    key = stem_cache_key(selected_upload)
+    if key in stem_results:
+        show_stems(stem_results[key])
+    elif st.button("Separate into six stems", key=f"separate_{selected_id}"):
+        with st.spinner("Checking cached stems and running Demucs if needed..."):
+            try:
+                stems, source = load_or_separate(selected_upload, stem_results, get_separator)
+            except Exception as exc:
+                st.error(f"Could not separate this clip: {exc}")
+            else:
+                st.success(f"Stems loaded from {source} and saved in session memory.")
+                show_stems(stems)
 
 
 if __name__ == "__main__":
