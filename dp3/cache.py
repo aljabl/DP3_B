@@ -92,7 +92,8 @@ class FeatureCache(Cache):
                                  if f"{stem}__{f}" not in names))
         }
 
-    def add_facets(self, key: str, facets: dict[str, dict[str, np.ndarray]]) -> None:
+    def add_facets(self, key: str, facets: dict[str, dict[str, np.ndarray]],
+                   metadata: dict | None = None) -> None:
         """Atomically add computed facets without replacing legacy descriptors."""
         folder = self.path(key)
         with np.load(folder / "features.npz", allow_pickle=False) as saved:
@@ -107,6 +108,16 @@ class FeatureCache(Cache):
             os.replace(temporary, folder / "features.npz")
         finally:
             temporary.unlink(missing_ok=True)
+        if metadata:
+            meta_path = folder / "meta.json"
+            meta = json.loads(meta_path.read_text())
+            meta.update(metadata)
+            meta_tmp = folder / "meta.json.tmp"
+            try:
+                meta_tmp.write_text(json.dumps(meta, indent=2))
+                os.replace(meta_tmp, meta_path)
+            finally:
+                meta_tmp.unlink(missing_ok=True)
 
     def save(self, key: str, result: dict):
         arrays = {"beat_times": np.asarray(result["beat_times"], dtype=np.float32)}
@@ -119,7 +130,10 @@ class FeatureCache(Cache):
                 for k in (*self._ARRAYS, *FacetPolicy().facets_for(name)):
                     arrays[f"{name}__{k}"] = s[k]
 
-        meta = {"tempo": result["tempo"], "n_beats": result["n_beats"], "stems": stems_meta}
+        meta = {"tempo": result["tempo"], "n_beats": result["n_beats"],
+                "meter_beats": result.get("meter_beats"),
+                "meter_confidence": result.get("meter_confidence", 0.0),
+                "stems": stems_meta}
 
         with self.write(key) as folder:
             np.savez_compressed(folder / "features.npz", **arrays)
@@ -139,6 +153,8 @@ class FeatureCache(Cache):
             beat_times = data["beat_times"]
 
         return {"tempo": meta["tempo"], "n_beats": meta["n_beats"],
+                "meter_beats": meta.get("meter_beats"),
+                "meter_confidence": meta.get("meter_confidence", 0.0),
                 "beat_times": beat_times, "stems": stems}
 
 class RunLog:

@@ -35,10 +35,21 @@ SILENCE_DB = -40.0                  # stems quieter than this (relative to the m
 MIN_BEATS = 8                       # fewer detected beats -> the track fails
 TIMBRE_ACTIVE_RANGE_DB = 40.0       # frames quieter than (stem peak - this) are ignored when pooling
 
-# Pooled vector sizes: mean + std over beats (chroma/MFCC) or frames (timbre)
+# Pooled vector sizes: mean + std over beats or analysis frames
 CHROMA_DIM = 2 * 12
 MFCC_DIM = 2 * (N_MFCC - 1)
 TIMBRE_DIM = 2 * (2 * (N_MFCC - 1) + 7 + 4)
+
+# Rhythm: pooled onset-pattern coefficients, beat-phase groove, and mix context.
+RHYTHM_BANDS = 12
+RHYTHM_PERIOD_BINS = 25
+RHYTHM_DCT_BANDS = 3
+RHYTHM_DCT_PERIODS = 17
+RHYTHM_SUBDIVISIONS = 4
+RHYTHM_PERIODICITY_DIM = 2 * RHYTHM_DCT_BANDS * RHYTHM_DCT_PERIODS
+RHYTHM_GROOVE_DIM = 2 * 3 * RHYTHM_SUBDIVISIONS
+RHYTHM_CONTEXT_DIM = 10
+RHYTHM_DIM = RHYTHM_PERIODICITY_DIM + RHYTHM_GROOVE_DIM + RHYTHM_CONTEXT_DIM
 
 # Facet names
 TIMBRE = "timbre"
@@ -56,5 +67,5 @@ FACETS_BY_STEM = {
     "piano": (RHYTHM, TIMBRE, MELODY),
 }
 
-# Facets that have an extractor. TODO: Add RHYTHM and MELODY here as they are built.
-IMPLEMENTED_FACETS = (TIMBRE,)
+# Facets that have an extractor. Add MELODY when its extractor is ready.
+IMPLEMENTED_FACETS = (TIMBRE, RHYTHM)

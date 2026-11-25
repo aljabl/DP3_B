@@ -12,6 +12,8 @@ from .features import FeatureExtractor, to_analysis
 from .stem_service import DATA_ROOT
 from .upload import CLIP_SECONDS, CLIP_TOLERANCE_SECONDS, UploadedAudio, source_matches_file
 from .facets import FacetPolicy
+from . import config
+from .rhythm import RHYTHM_BLOCKS
 
 
 class SearchError(ValueError):
@@ -38,7 +40,7 @@ def _read_audio(data: bytes) -> tuple[np.ndarray, int]:
 
 
 def query_descriptors(mix_bytes: bytes, stem_bytes: bytes, stem: str) -> dict[str, np.ndarray]:
-    """Use the offline pipeline's beat grid, chroma, and MFCC extraction."""
+    """Use the same facet extractors as the offline index build."""
     mix, mix_rate = _read_audio(mix_bytes)
     isolated, stem_rate = _read_audio(stem_bytes)
     analysis = FeatureExtractor().analyze(
@@ -118,35 +120,43 @@ class SimilarityIndex:
             raise SearchError(f"No indexed {stem} stems are available.")
 
         positions = candidates["row"].to_numpy(dtype=int)
-        if (positions < 0).any() or (positions >= len(self.vectors[facets[0]])).any():
+        if (positions < 0).any() or any(
+            (positions >= len(self.vectors[facet])).any() for facet in facets
+        ):
             raise SearchError("The saved search index has invalid row numbers.")
 
-        candidate_parts = []
-        query_parts = []
+        facet_scores = []
         for facet in facets:
             values = self.vectors[facet][positions]
             requested = np.asarray(query[facet], dtype=np.float32)
             if requested.shape != (values.shape[1],):
                 raise SearchError(f"The {facet} query does not match the saved index.")
+            if not np.isfinite(requested).all() or not np.any(requested):
+                raise SearchError(f"The {facet} query has no usable search features.")
+            blocks = (RHYTHM_BLOCKS if facet == config.RHYTHM and
+                      values.shape[1] == config.RHYTHM_DIM else ((slice(None), 1.0),))
+            candidate_parts, query_parts = [], []
+            for region, contribution in blocks:
+                block = values[:, region]
+                mean = block.mean(axis=0)
+                scale = block.std(axis=0) + 1e-8
+                weight = np.sqrt(contribution / block.shape[1])
+                candidate_parts.append((block - mean) / scale * weight)
+                query_parts.append((requested[region] - mean) / scale * weight)
+            matrix = np.hstack(candidate_parts)
+            query_vector = np.concatenate(query_parts)
+            query_norm = np.linalg.norm(query_vector)
+            if not np.isfinite(query_norm) or query_norm < 1e-12:
+                raise SearchError(f"The {facet} query has no usable search features.")
+            norms = np.linalg.norm(matrix, axis=1)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                score = (matrix @ query_vector) / (norms * query_norm)
+            if facet == config.RHYTHM:
+                score = np.where(np.any(values, axis=1), score, -np.inf)
+            facet_scores.append(np.where(np.isfinite(score), score, -np.inf))
 
-            mean = values.mean(axis=0)
-            scale = values.std(axis=0) + 1e-8
-            weight = np.sqrt(values.shape[1])
-            candidate_parts.append((values - mean) / scale / weight)
-            query_parts.append((requested - mean) / scale / weight)
-
-        matrix = np.hstack(candidate_parts)
-        query_vector = np.concatenate(query_parts)
-        query_norm = np.linalg.norm(query_vector)
-
-        if not np.isfinite(query_norm) or query_norm < 1e-12:
-            raise SearchError("The selected stem has no usable search features.")
-
-        norms = np.linalg.norm(matrix, axis=1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            scores = (matrix @ query_vector) / (norms * query_norm)
-
-        scores = np.where(np.isfinite(scores), scores, -np.inf)
+        # Every implemented facet contributes exactly one equally weighted score.
+        scores = np.mean(facet_scores, axis=0)
 
         results = []
         for position in np.argsort(-scores, kind="stable"):

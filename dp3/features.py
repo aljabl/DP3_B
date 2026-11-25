@@ -1,6 +1,6 @@
 """
-Extracts Beat-synchronous chroma and MFCC features per stem, and pools them
-into one embedding per stem. The emdedding is stored in FeatureCache.
+Extracts beat-synchronous chroma and MFCC features plus similarity facets per
+stem. The pooled embeddings are stored in FeatureCache.
 
 Chroma: shows which pitch classes are present (the notes and harmony)
 MFCCs: describe timbre
@@ -12,6 +12,7 @@ import numpy as np
 
 from . import config
 from .facets import FacetPolicy
+from .rhythm import RhythmExtractor
 
 
 def load_mono(path) -> np.ndarray:
@@ -95,8 +96,9 @@ class FeatureExtractor:
         self.silence_db = silence_db
         self.min_beats = min_beats
         self.policy = policy or FacetPolicy()
-        # Each extractor has .extract(stem) -> np.ndarray. Add rhythm and melody here.
-        self.extractors = extractors or {config.TIMBRE: TimbreExtractor()}
+        self.extractors = extractors if extractors is not None else {
+            config.TIMBRE: TimbreExtractor(), config.RHYTHM: RhythmExtractor(),
+        }
 
     def track_beats(self, mix:np.ndarray) -> tuple:
         """
@@ -128,9 +130,9 @@ class FeatureExtractor:
         mix, stems: mono float arrays at config.ANALYSIS_SR (stems maps name -> array).
         Raises ValueError if no stems are given or too few beats are found.
 
-        Returns a dict with tempo, beat_times, n_beats, beat_time_s, stems_time_s and
+        Returns a dict with tempo, beat_times, meter estimate, timing and
         stems: name -> {"status": "ok" | "silent", "rms_db", and for "ok" stems
-        chroma_beat, mfcc_beat (beat-level) and chroma, mfcc (pooled)}.
+        beat-level chroma/MFCC and pooled facet vectors}.
         """
         if not stems:
             raise ValueError("no stems to analyze")
@@ -139,11 +141,17 @@ class FeatureExtractor:
         # Track beats for entire mix
         tempo, frames, times = self.track_beats(mix)
         beat_time = time.perf_counter() - t0
+        context_start = time.perf_counter()
+        rhythm_context = (self.extractors[config.RHYTHM].context(mix, times, tempo)
+                          if config.RHYTHM in self.policy.indexed_facets() else None)
+        rhythm_context_time = time.perf_counter() - context_start
 
         t0 = time.perf_counter()
         chroma_time = 0.0 # TODO: remove
         mfcc_time = 0.0 # TODO: remove
         facet_times = {facet: 0.0 for facet in self.policy.indexed_facets()}
+        if rhythm_context is not None:
+            facet_times[config.RHYTHM] = rhythm_context_time
 
         out = {}
 
@@ -169,7 +177,8 @@ class FeatureExtractor:
 
             # Only compute the facets this stem uses (raises for an unknown stem)
             for facet in self.policy.facets_for(name):
-                result[facet], elapsed = self._timed(self.extractors[facet].extract, y)
+                args = (y, rhythm_context) if facet == config.RHYTHM else (y,)
+                result[facet], elapsed = self._timed(self.extractors[facet].extract, *args)
                 facet_times[facet] += elapsed
 
             out[name] = result
@@ -179,7 +188,9 @@ class FeatureExtractor:
         return {"tempo": tempo, "beat_times": times, "n_beats": int(len(frames)),
                 "beat_time_s": beat_time, "stems_time_s": stems_time,
                 "chroma_time_s": chroma_time, "mfcc_time_s": mfcc_time,
-                "facet_time_s": facet_times, "stems": out}
+                "facet_time_s": facet_times, "stems": out,
+                "meter_beats": rhythm_context.meter_beats if rhythm_context else None,
+                "meter_confidence": rhythm_context.meter_confidence if rhythm_context else 0.0}
 
     @staticmethod
     def _timed(func, *args) -> tuple:

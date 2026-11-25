@@ -7,7 +7,7 @@ from pathlib import Path
 import streamlit as st
 
 from dp3.search import SimilarityIndex, SearchResult, query_descriptors
-from dp3.stem_service import load_or_separate, stem_cache_key
+from dp3.stem_service import DATA_ROOT, load_or_separate, stem_cache_key
 from dp3.ui import EMPTY_MAP, apply_style, waveform_player_html
 from dp3.upload import (
     CLIP_SECONDS,
@@ -32,8 +32,16 @@ def get_separator():
 
 
 @st.cache_resource
-def get_similarity_index() -> SimilarityIndex:
+def _load_similarity_index(index_version: tuple[int, int]) -> SimilarityIndex:
     return SimilarityIndex.load()
+
+
+def get_similarity_index() -> SimilarityIndex:
+    """Reload the cached search index when the table build replaces its files."""
+    folder = DATA_ROOT / "index"
+    version = tuple((folder / name).stat().st_mtime_ns if (folder / name).exists() else 0
+                    for name in ("embeddings.npz", "embeddings_index.csv"))
+    return _load_similarity_index(version)
 
 
 def add_uploads(uploads: dict[str, UploadedAudio], files: list) -> list[str]:

@@ -28,7 +28,8 @@ SEPARATION_COLUMNS = ["file_id", "status", "time_s", "residual", "error"]
 EXTRACTION_COLUMNS = ["file_id", "status", "time_s", "tempo", "n_beats",
                       "n_stems_ok", "n_stems_silent", "beat_time_s",
                       "stems_time_s", "chroma_time_s", "mfcc_time_s", "error"]
-DATASET_COLUMNS = ["dataset", "track_id", "stem", "status", "rms_db", "row"]
+DATASET_COLUMNS = ["dataset", "track_id", "stem", "status", "rms_db", "row",
+                   "meter_beats", "meter_confidence"]
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -140,19 +141,41 @@ def backfill_facets(cache: FeatureCache, stems_cache: StemCache,
     if not missing:
         return
     paths = stems_cache.paths(track_id)
+    rhythm_context = None
+    loaded_audio = {}
+    if any(config.RHYTHM in facets for facets in missing.values()):
+        # Old caches have the beat grid, but not the original mix. Sum saved
+        # Demucs stems to recover the common accent pattern for meter.
+        cached = cache.load(track_id)
+        loaded_audio = {stem: load_mono(path) for stem, path in paths.items()}
+        if not loaded_audio:
+            raise FileNotFoundError(f"saved stems are missing for {track_id}")
+        length = min(map(len, loaded_audio.values()))
+        mix = np.sum([audio[:length] for audio in loaded_audio.values()], axis=0)
+        rhythm_context = extractor.extractors[config.RHYTHM].context(
+            mix, cached["beat_times"], cached["tempo"]
+        )
     additions = {}
     for stem, facets in missing.items():
         if stem not in paths:
             raise FileNotFoundError(f"saved {stem} stem is missing for {track_id}")
-        audio = load_mono(paths[stem])
-        additions[stem] = {facet: extractor.extractors[facet].extract(audio)
-                           for facet in facets}
-    cache.add_facets(track_id, additions)
+        audio = loaded_audio.get(stem)
+        if audio is None:
+            audio = load_mono(paths[stem])
+        additions[stem] = {
+            facet: (extractor.extractors[facet].extract(audio, rhythm_context)
+                    if facet == config.RHYTHM else extractor.extractors[facet].extract(audio))
+            for facet in facets
+        }
+    metadata = ({"meter_beats": rhythm_context.meter_beats,
+                 "meter_confidence": rhythm_context.meter_confidence}
+                if rhythm_context else None)
+    cache.add_facets(track_id, additions, metadata)
     print(f"backfilled {track_id} ({', '.join(sorted(missing))})")
 
 def stage_table():
     """Collect the pooled vectors of every dataset under data/features into one table:
-    data/index/embeddings_index.csv (dataset, track_id, stem, status, rms_db, row) and
+    data/index/embeddings_index.csv (stem rows, vector positions, and meter estimates) and
     data/index/embeddings.npz (implemented facets; `row` indexes into them, -1 for silent stems).
     Vectors are stored raw: standardizing / combining them is done when the search index is built."""
 
@@ -180,7 +203,9 @@ def stage_table():
 
             for stem, s in result["stems"].items():
                 row = {"dataset": dataset_dir.name, "track_id": track_id, "stem": stem,
-                       "status": s["status"], "rms_db": s["rms_db"], "row": -1}
+                       "status": s["status"], "rms_db": s["rms_db"], "row": -1,
+                       "meter_beats": result.get("meter_beats"),
+                       "meter_confidence": result.get("meter_confidence", 0.0)}
                 if s["status"] == "ok":
                     applicable = policy.facets_for(stem)
                     missing = [facet for facet in applicable if facet not in s]
@@ -204,7 +229,8 @@ def stage_table():
     }
     for facet, vectors in facet_vectors.items():
         first = next((vector for vector in vectors if vector is not None), None)
-        dimension = len(first) if first is not None else (config.TIMBRE_DIM if facet == config.TIMBRE else None)
+        empty_dimensions = {config.TIMBRE: config.TIMBRE_DIM, config.RHYTHM: config.RHYTHM_DIM}
+        dimension = len(first) if first is not None else empty_dimensions.get(facet)
         if dimension is None:
             raise RuntimeError(f"Cannot build an empty {facet} index without a known dimension")
         arrays[facet] = (np.stack([vector if vector is not None else np.zeros(dimension, np.float32)

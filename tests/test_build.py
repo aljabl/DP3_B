@@ -1,6 +1,7 @@
 """Checks that legacy feature caches become a usable facet index."""
 
 import json
+from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -42,7 +43,13 @@ class BuildTests(unittest.TestCase):
 
             class StubExtractor:
                 def __init__(self):
-                    self.extractors = {config.TIMBRE: StubTimbre()}
+                    self.extractors = {
+                        config.TIMBRE: StubTimbre(),
+                        config.RHYTHM: SimpleNamespace(
+                            context=lambda *_: SimpleNamespace(meter_beats=4, meter_confidence=0.8),
+                            extract=lambda *_: np.arange(config.RHYTHM_DIM, dtype=np.float32),
+                        ),
+                    }
 
             with patch.object(config, "DATA", root), patch.object(config, "INDEX_DIR", root / "index"), \
                     patch.object(build, "FeatureExtractor", StubExtractor), \
@@ -52,13 +59,17 @@ class BuildTests(unittest.TestCase):
                 table = pd.read_csv(root / "index" / "embeddings_index.csv")
                 with np.load(root / "index" / "embeddings.npz") as saved:
                     self.assertEqual(saved["timbre"].shape, (1, config.TIMBRE_DIM))
+                    self.assertEqual(saved["rhythm"].shape, (1, config.RHYTHM_DIM))
                     np.testing.assert_array_equal(saved["timbre"][0], np.arange(config.TIMBRE_DIM))
+                    np.testing.assert_array_equal(saved["rhythm"][0], np.arange(config.RHYTHM_DIM))
                     np.testing.assert_array_equal(saved["chroma"][0], chroma)
                     np.testing.assert_array_equal(saved["mfcc"][0], mfcc)
                 self.assertEqual(table["row"].tolist(), [0, -1])
                 self.assertEqual(table["track_id"].tolist(), ["song/part", "song/part"])
+                self.assertEqual(table["meter_beats"].tolist(), [4, 4])
                 self.assertEqual(SimilarityIndex.load(root).vectors["timbre"].shape,
                                  (1, config.TIMBRE_DIM))
+                self.assertEqual(FeatureCache(root / "features" / "previews").load("song/part")["meter_beats"], 4)
 
     def test_empty_table_has_two_dimensional_timbre_array(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -68,6 +79,7 @@ class BuildTests(unittest.TestCase):
                 build.stage_table()
             with np.load(root / "index" / "embeddings.npz") as saved:
                 self.assertEqual(saved["timbre"].shape, (0, config.TIMBRE_DIM))
+                self.assertEqual(saved["rhythm"].shape, (0, config.RHYTHM_DIM))
 
 
 if __name__ == "__main__":

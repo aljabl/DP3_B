@@ -43,14 +43,14 @@ class SearchTests(unittest.TestCase):
                 [[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3], [0.6, 0.4], [0.0, 0.8], [1.0, 0.0]],
                 dtype=np.float32,
             )
-            index = SimilarityIndex(pd.DataFrame(rows), {"timbre": vectors}, root)
+            index = SimilarityIndex(pd.DataFrame(rows), {"timbre": vectors, "rhythm": vectors}, root)
             source = root / "audio" / "previews" / "Self.wav"
             upload = inspect_audio(source.name, source.read_bytes())
             upload.clip_bytes = whole_clip_audio(upload)
             upload.clip_start_seconds = 0.0
 
             results = index.search(
-                "drums", {"timbre": vectors[0]}, upload=upload, limit=3
+                "drums", {"timbre": vectors[0], "rhythm": vectors[0]}, upload=upload, limit=3
             )
             self.assertEqual([result.track_id for result in results], ["Good", "Medium", "Far"])
             self.assertTrue(all(result.stem == "drums" for result in results))
@@ -63,6 +63,27 @@ class SearchTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(SearchError, "index is missing"):
                 SimilarityIndex.load(Path(tmp))
+
+    def test_timbre_and_rhythm_contribute_equally(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("A", "B"):
+                mix = root / "audio" / "previews" / f"{name}.wav"
+                mix.parent.mkdir(parents=True, exist_ok=True)
+                mix.write_bytes(wav_bytes(0.1))
+                stem = root / "stems" / "previews" / name / "drums.flac"
+                stem.parent.mkdir(parents=True, exist_ok=True)
+                sf.write(stem, np.zeros(30 * SAMPLE_RATE), SAMPLE_RATE)
+            rows = pd.DataFrame([
+                {"dataset": "previews", "track_id": name, "stem": "drums", "status": "ok", "row": i}
+                for i, name in enumerate(("A", "B"))
+            ])
+            timbre = np.array([[1, 1], [3, 3]], np.float32)
+            rhythm = np.array([[3, 3], [1, 1]], np.float32)
+            index = SimilarityIndex(rows, {"timbre": timbre, "rhythm": rhythm}, root)
+            results = index.search("drums", {"timbre": timbre[0], "rhythm": rhythm[1]})
+            self.assertEqual(len(results), 2)
+            self.assertTrue(all(abs(result.similarity) < 1e-6 for result in results))
 
 
 if __name__ == "__main__":
