@@ -11,6 +11,7 @@ import librosa
 import numpy as np
 
 from . import config
+from .facets import FacetPolicy
 
 
 def load_mono(path) -> np.ndarray:
@@ -40,14 +41,62 @@ def pool(beat_matrix: np.ndarray) -> np.ndarray:
 
     return np.concatenate([beat_matrix.mean(axis=1), beat_matrix.std(axis=1)]).astype(np.float32)
 
+class TimbreExtractor:
+    """
+    Describes the timbre of a mono stem as one fixed-size vector.
+
+    Frame-level spectral features are computed over the whole stem, quiet
+    frames are dropped, and each feature is summarised by its mean and std.
+    """
+
+    def __init__(self, active_range_db: float = config.TIMBRE_ACTIVE_RANGE_DB):
+        self.active_range_db = active_range_db
+
+    def extract(self, stem: np.ndarray) -> np.ndarray:
+        """Return the pooled timbre vector (mean and std of every feature)."""
+
+        features = self._frame_features(stem)
+        return pool(features[:, self._active_frames(stem)])
+
+    @staticmethod
+    def _frame_features(stem: np.ndarray) -> np.ndarray:
+        """Frame-level features, shaped (n_features, n_frames)."""
+
+        sr, hop = config.ANALYSIS_SR, config.HOP
+        spectrum = np.abs(librosa.stft(stem, hop_length=hop))
+        mfcc = librosa.feature.mfcc(y=stem, sr=sr, hop_length=hop, n_mfcc=config.N_MFCC)[1:]
+
+        return np.vstack([
+            mfcc,                                                    # spectral envelope
+            librosa.feature.delta(mfcc),                             # how the envelope changes
+            librosa.feature.spectral_contrast(S=spectrum, sr=sr),    # peaks vs valleys per band
+            librosa.feature.spectral_centroid(S=spectrum, sr=sr),    # brightness
+            librosa.feature.spectral_rolloff(S=spectrum, sr=sr),     # high-frequency extent
+            librosa.feature.spectral_flatness(S=spectrum),           # noisy vs tonal
+            # Spectral flux. Pooling keeps only its average and spread, not the
+            # timing of events, so it stays a timbre feature and not a rhythm one.
+            librosa.onset.onset_strength(y=stem, sr=sr, hop_length=config.HOP)[np.newaxis, :],
+        ])
+
+    def _active_frames(self, stem: np.ndarray) -> np.ndarray:
+        """Boolean mask of frames within active_range_db of the stem's loudest frame."""
+
+        rms = librosa.feature.rms(y=stem, hop_length=config.HOP)[0]
+        level_db = 20 * np.log10(rms + 1e-12)
+        return level_db >= level_db.max() - self.active_range_db
+
 class FeatureExtractor:
     """
     Beat tracking on the full audio mix, plus beat-synchronous features per stem.
     """
 
-    def __init__(self, silence_db:float = config.SILENCE_DB, min_beats:int = config.MIN_BEATS):
+    def __init__(self, silence_db: float = config.SILENCE_DB, min_beats: int = config.MIN_BEATS,
+                 policy: FacetPolicy | None = None, extractors: dict | None = None):
         self.silence_db = silence_db
         self.min_beats = min_beats
+        self.policy = policy or FacetPolicy()
+        # Each extractor has .extract(stem) -> np.ndarray. Add rhythm and melody here.
+        self.extractors = extractors or {config.TIMBRE: TimbreExtractor()}
 
     def track_beats(self, mix:np.ndarray) -> tuple:
         """
@@ -92,8 +141,9 @@ class FeatureExtractor:
         beat_time = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        chroma_time = 0.0
-        mfcc_time = 0.0
+        chroma_time = 0.0 # TODO: remove
+        mfcc_time = 0.0 # TODO: remove
+        facet_times = {facet: 0.0 for facet in self.policy.indexed_facets()}
 
         out = {}
 
@@ -112,16 +162,24 @@ class FeatureExtractor:
             chroma_time += chroma_s
             mfcc_time += mfcc_s
 
-            out[name] = {"status": "ok", "rms_db": db,
-                         "chroma_beat": chroma_b.astype(np.float32),
-                         "mfcc_beat": mfcc_b.astype(np.float32),
-                         "chroma": pool(chroma_b), "mfcc": pool(mfcc_b)}
+            result = {"status": "ok", "rms_db": db,
+                      "chroma_beat": chroma_b.astype(np.float32),
+                      "mfcc_beat": mfcc_b.astype(np.float32),
+                      "chroma": pool(chroma_b), "mfcc": pool(mfcc_b)}
+
+            # Only compute the facets this stem uses (raises for an unknown stem)
+            for facet in self.policy.facets_for(name):
+                result[facet], elapsed = self._timed(self.extractors[facet].extract, y)
+                facet_times[facet] += elapsed
+
+            out[name] = result
 
         stems_time = time.perf_counter() - t0
 
         return {"tempo": tempo, "beat_times": times, "n_beats": int(len(frames)),
                 "beat_time_s": beat_time, "stems_time_s": stems_time,
-                "chroma_time_s": chroma_time, "mfcc_time_s": mfcc_time, "stems": out}
+                "chroma_time_s": chroma_time, "mfcc_time_s": mfcc_time,
+                "facet_time_s": facet_times, "stems": out}
 
     @staticmethod
     def _timed(func, *args) -> tuple:

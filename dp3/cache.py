@@ -4,9 +4,12 @@ Atomic folder cache and CSV run log, shared by every stage.
 
 import csv
 import json
+import os
 import shutil
 import soundfile as sf
 import numpy as np
+
+from .facets import FacetPolicy
 
 from contextlib import contextmanager
 from pathlib import Path
@@ -66,6 +69,45 @@ class FeatureCache(Cache):
 
     _ARRAYS = ("chroma_beat", "mfcc_beat", "chroma", "mfcc")
 
+    def keys(self) -> list[str]:
+        """Find complete feature entries, including IDs containing a slash."""
+        return sorted(
+            folder.parent.relative_to(self.root).as_posix()
+            for folder in self.root.rglob("meta.json")
+            if (folder.parent / "features.npz").is_file()
+            and not any(part.endswith(".tmp") for part in folder.relative_to(self.root).parts)
+        )
+
+    def missing_facets(self, key: str) -> dict[str, tuple[str, ...]]:
+        """Return facets absent from an existing track cache, per active stem."""
+        meta = json.loads((self.path(key) / "meta.json").read_text())
+        with np.load(self.path(key) / "features.npz", allow_pickle=False) as data:
+            names = set(data.files)
+        policy = FacetPolicy()
+        return {
+            stem: missing
+            for stem, info in meta["stems"].items()
+            if info["status"] == "ok"
+            if (missing := tuple(f for f in policy.facets_for(stem)
+                                 if f"{stem}__{f}" not in names))
+        }
+
+    def add_facets(self, key: str, facets: dict[str, dict[str, np.ndarray]]) -> None:
+        """Atomically add computed facets without replacing legacy descriptors."""
+        folder = self.path(key)
+        with np.load(folder / "features.npz", allow_pickle=False) as saved:
+            arrays = {name: saved[name] for name in saved.files}
+        for stem, values in facets.items():
+            for facet, vector in values.items():
+                arrays[f"{stem}__{facet}"] = np.asarray(vector, dtype=np.float32)
+        temporary = folder / "features.npz.tmp"
+        try:
+            with temporary.open("wb") as output:
+                np.savez_compressed(output, **arrays)
+            os.replace(temporary, folder / "features.npz")
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def save(self, key: str, result: dict):
         arrays = {"beat_times": np.asarray(result["beat_times"], dtype=np.float32)}
         stems_meta = {}
@@ -74,7 +116,7 @@ class FeatureCache(Cache):
             stems_meta[name] = {"status": s["status"], "rms_db": round(s["rms_db"], 2)}
 
             if s["status"] == "ok":
-                for k in self._ARRAYS:
+                for k in (*self._ARRAYS, *FacetPolicy().facets_for(name)):
                     arrays[f"{name}__{k}"] = s[k]
 
         meta = {"tempo": result["tempo"], "n_beats": result["n_beats"], "stems": stems_meta}
@@ -86,18 +128,18 @@ class FeatureCache(Cache):
     def load(self, key: str) -> dict:
         folder = self.path(key)
         meta = json.loads((folder / "meta.json").read_text())
-        data = np.load(folder / "features.npz")
         stems = {}
-
-        for name, info in meta["stems"].items():
-            stems[name] = dict(info)
-
-            if info["status"] == "ok":
-                for k in self._ARRAYS:
-                    stems[name][k] = data[f"{name}__{k}"]
+        with np.load(folder / "features.npz", allow_pickle=False) as data:
+            for name, info in meta["stems"].items():
+                stems[name] = dict(info)
+                if info["status"] == "ok":
+                    for k in (*self._ARRAYS, *FacetPolicy().facets_for(name)):
+                        if f"{name}__{k}" in data:
+                            stems[name][k] = data[f"{name}__{k}"]
+            beat_times = data["beat_times"]
 
         return {"tempo": meta["tempo"], "n_beats": meta["n_beats"],
-                "beat_times": data["beat_times"], "stems": stems}
+                "beat_times": beat_times, "stems": stems}
 
 class RunLog:
     """Appends one CSV row per processed item. Columns are fixed at construction."""

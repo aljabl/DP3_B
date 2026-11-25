@@ -33,7 +33,28 @@ HOP = 512                           # shared by beat tracking, chroma and MFCC
 N_MFCC = 20                         # coefficient 0 (mostly loudness) is dropped
 SILENCE_DB = -40.0                  # stems quieter than this (relative to the mix) are skipped
 MIN_BEATS = 8                       # fewer detected beats -> the track fails
+TIMBRE_ACTIVE_RANGE_DB = 40.0       # frames quieter than (stem peak - this) are ignored when pooling
 
-# Pooled vector sizes: mean + std over beats
+# Pooled vector sizes: mean + std over beats (chroma/MFCC) or frames (timbre)
 CHROMA_DIM = 2 * 12
 MFCC_DIM = 2 * (N_MFCC - 1)
+TIMBRE_DIM = 2 * (2 * (N_MFCC - 1) + 7 + 4)
+
+# Facet names
+TIMBRE = "timbre"
+RHYTHM = "rhythm"
+MELODY = "melody"
+
+# Facets that define similarity for each stem type (drums are unpitched, so no melody).
+# To support a new stem such as piano, add it here.
+FACETS_BY_STEM = {
+    "drums": (RHYTHM, TIMBRE),
+    "vocals": (RHYTHM, TIMBRE, MELODY),
+    "bass": (RHYTHM, TIMBRE, MELODY),
+    "other": (RHYTHM, TIMBRE, MELODY),
+    "guitar": (RHYTHM, TIMBRE, MELODY),
+    "piano": (RHYTHM, TIMBRE, MELODY),
+}
+
+# Facets that have an extractor. TODO: Add RHYTHM and MELODY here as they are built.
+IMPLEMENTED_FACETS = (TIMBRE,)

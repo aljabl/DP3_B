@@ -8,6 +8,7 @@ simply be started again.
 """
 
 import argparse
+import os
 import time
 import traceback
 import numpy as np
@@ -20,6 +21,7 @@ from dp3 import config
 from dp3.cache import Cache, StemCache, FeatureCache, RunLog
 from dp3.separation import StemSeparator
 from dp3.features import FeatureExtractor, load_mono
+from dp3.facets import FacetPolicy
 from dp3.evaluate import ListeningTest
 
 SEPARATION_COLUMNS = ["file_id", "status", "time_s", "residual", "error"]
@@ -101,6 +103,16 @@ def stage_extract(tracks, dataset:str):
     cache = FeatureCache(config.features_dir(dataset))
     extractor = FeatureExtractor()
 
+    # Older caches contain chroma/MFCC only. Reuse those arrays and compute
+    # just the newly required facets from saved stems before the table stage.
+    for track in tracks:
+        if not cache.has(track.file_id):
+            continue
+        try:
+            backfill_facets(cache, stems_cache, extractor, track.file_id)
+        except Exception as e:
+            print(f"extract: FAILED backfill {track.file_id}: {describe_error(e)}")
+
     def process(track):
         if not stems_cache.has(track.file_id):
             raise FileNotFoundError("stems not found (run the separate stage first)")
@@ -120,13 +132,34 @@ def stage_extract(tracks, dataset:str):
 
     run_stage(tracks, cache, RunLog(cache.root / "features_log.csv", EXTRACTION_COLUMNS), process)
 
+
+def backfill_facets(cache: FeatureCache, stems_cache: StemCache,
+                    extractor: FeatureExtractor, track_id: str) -> None:
+    """Add missing facet vectors to an existing cache using saved stems."""
+    missing = cache.missing_facets(track_id)
+    if not missing:
+        return
+    paths = stems_cache.paths(track_id)
+    additions = {}
+    for stem, facets in missing.items():
+        if stem not in paths:
+            raise FileNotFoundError(f"saved {stem} stem is missing for {track_id}")
+        audio = load_mono(paths[stem])
+        additions[stem] = {facet: extractor.extractors[facet].extract(audio)
+                           for facet in facets}
+    cache.add_facets(track_id, additions)
+    print(f"backfilled {track_id} ({', '.join(sorted(missing))})")
+
 def stage_table():
     """Collect the pooled vectors of every dataset under data/features into one table:
     data/index/embeddings_index.csv (dataset, track_id, stem, status, rms_db, row) and
-    data/index/embeddings.npz (chroma, mfcc; `row` indexes into them, -1 for silent stems).
+    data/index/embeddings.npz (implemented facets; `row` indexes into them, -1 for silent stems).
     Vectors are stored raw: standardizing / combining them is done when the search index is built."""
 
     rows, chroma, mfcc = [], [], []
+    policy = FacetPolicy()
+    facets = policy.indexed_facets()
+    facet_vectors = {facet: [] for facet in facets}
     features_root = config.DATA / "features"
 
     if not features_root.exists():
@@ -134,11 +167,14 @@ def stage_table():
 
     for dataset_dir in sorted(p for p in features_root.iterdir() if p.is_dir()):
         cache = FeatureCache(dataset_dir)
+        stems_cache = StemCache(config.stems_dir(dataset_dir.name))
+        extractor = FeatureExtractor()
 
         for track_id in cache.keys():
+            backfill_facets(cache, stems_cache, extractor, track_id)
             try:
                 result = cache.load(track_id)
-            except (FileNotFoundError):
+            except FileNotFoundError:
                 print(f"load: file {track_id} not found")
                 continue
 
@@ -146,19 +182,44 @@ def stage_table():
                 row = {"dataset": dataset_dir.name, "track_id": track_id, "stem": stem,
                        "status": s["status"], "rms_db": s["rms_db"], "row": -1}
                 if s["status"] == "ok":
-
+                    applicable = policy.facets_for(stem)
+                    missing = [facet for facet in applicable if facet not in s]
+                    if missing:
+                        raise RuntimeError(
+                            f"{dataset_dir.name}/{track_id}/{stem} lacks {', '.join(missing)}; "
+                            f"run python build.py --dataset {dataset_dir.name} --stage extract"
+                        )
                     row["row"] = len(chroma)
                     chroma.append(s["chroma"])
                     mfcc.append(s["mfcc"])
+                    for facet in facets:
+                        facet_vectors[facet].append(s[facet] if facet in applicable else None)
 
                 rows.append(row)
 
     config.INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows, columns=DATASET_COLUMNS).to_csv(config.INDEX_DIR / "embeddings_index.csv", index=False)
-    np.savez_compressed(
-        config.INDEX_DIR / "embeddings.npz",
-        chroma=np.stack(chroma) if chroma else np.empty((0, config.CHROMA_DIM), np.float32),
-        mfcc=np.stack(mfcc) if mfcc else np.empty((0, config.MFCC_DIM), np.float32))
+    arrays = {
+        "chroma": np.stack(chroma) if chroma else np.empty((0, config.CHROMA_DIM), np.float32),
+        "mfcc": np.stack(mfcc) if mfcc else np.empty((0, config.MFCC_DIM), np.float32),
+    }
+    for facet, vectors in facet_vectors.items():
+        first = next((vector for vector in vectors if vector is not None), None)
+        dimension = len(first) if first is not None else (config.TIMBRE_DIM if facet == config.TIMBRE else None)
+        if dimension is None:
+            raise RuntimeError(f"Cannot build an empty {facet} index without a known dimension")
+        arrays[facet] = (np.stack([vector if vector is not None else np.zeros(dimension, np.float32)
+                                   for vector in vectors]) if vectors else np.empty((0, dimension), np.float32))
+    csv_tmp = config.INDEX_DIR / "embeddings_index.csv.tmp"
+    npz_tmp = config.INDEX_DIR / "embeddings.npz.tmp"
+    try:
+        pd.DataFrame(rows, columns=DATASET_COLUMNS).to_csv(csv_tmp, index=False)
+        with npz_tmp.open("wb") as output:
+            np.savez_compressed(output, **arrays)
+        os.replace(npz_tmp, config.INDEX_DIR / "embeddings.npz")
+        os.replace(csv_tmp, config.INDEX_DIR / "embeddings_index.csv")
+    finally:
+        csv_tmp.unlink(missing_ok=True)
+        npz_tmp.unlink(missing_ok=True)
 
     print(f"table: {len(rows)} stem rows ({len(chroma)} ok) -> {config.INDEX_DIR}")
 

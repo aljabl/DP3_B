@@ -43,14 +43,14 @@ class SearchTests(unittest.TestCase):
                 [[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3], [0.6, 0.4], [0.0, 0.8], [1.0, 0.0]],
                 dtype=np.float32,
             )
-            index = SimilarityIndex(pd.DataFrame(rows), {"chroma": vectors, "mfcc": vectors}, root)
+            index = SimilarityIndex(pd.DataFrame(rows), {"timbre": vectors}, root)
             source = root / "audio" / "previews" / "Self.wav"
             upload = inspect_audio(source.name, source.read_bytes())
             upload.clip_bytes = whole_clip_audio(upload)
             upload.clip_start_seconds = 0.0
 
             results = index.search(
-                "drums", {"chroma": vectors[0], "mfcc": vectors[0]}, upload=upload, limit=3
+                "drums", {"timbre": vectors[0]}, upload=upload, limit=3
             )
             self.assertEqual([result.track_id for result in results], ["Good", "Medium", "Far"])
             self.assertTrue(all(result.stem == "drums" for result in results))
