@@ -99,8 +99,9 @@ class SimilarityIndex:
         *,
         upload: UploadedAudio | None = None,
         limit: int = 3,
+        all_stems: bool = False,
     ) -> list[SearchResult]:
-        """Return the most similar playable stems of the same type."""
+        """Return playable matches from the selected stem type or every type."""
 
         try:
             facets = self.policy.facets_for(stem)
@@ -111,13 +112,25 @@ class SimilarityIndex:
         if not facets:
             raise SearchError(f"No search facets are available for {stem} yet.")
 
+        candidates = self.rows[self.rows["status"] == "ok"]
+        if not all_stems:
+            candidates = candidates[candidates["stem"] == stem]
+        if candidates.empty:
+            scope = "stems" if all_stems else f"{stem} stems"
+            raise SearchError(f"No indexed {scope} are available.")
+        if all_stems:
+            # A future facet may not apply to every stem (for example melody
+            # on drums). Cross-stem searches use only their shared facets.
+            facets = tuple(facet for facet in facets if all(
+                facet in self.policy.facets_for(candidate_stem)
+                for candidate_stem in candidates["stem"].unique()
+            ))
+            if not facets:
+                raise SearchError("No search facets are shared by the indexed stem types.")
+
         missing = [facet for facet in facets if facet not in query]
         if missing:
             raise SearchError(f"The query is missing: {', '.join(missing)}.")
-
-        candidates = self.rows[(self.rows["stem"] == stem) & (self.rows["status"] == "ok")]
-        if candidates.empty:
-            raise SearchError(f"No indexed {stem} stems are available.")
 
         positions = candidates["row"].to_numpy(dtype=int)
         if (positions < 0).any() or any(
@@ -164,8 +177,9 @@ class SimilarityIndex:
                 break
             row = candidates.iloc[int(position)]
             dataset, track_id = str(row["dataset"]), str(row["track_id"])
+            matched_stem = str(row["stem"])
             mix_path = self._mix_path(dataset, track_id)
-            stem_path = self.data_root / "stems" / dataset / track_id / f"{stem}.flac"
+            stem_path = self.data_root / "stems" / dataset / track_id / f"{matched_stem}.flac"
             if mix_path is None or not mix_path.is_file() or not stem_path.is_file():
                 continue
             if (
@@ -175,5 +189,6 @@ class SimilarityIndex:
                 and source_matches_file(mix_path, upload)
             ):
                 continue
-            results.append(SearchResult(dataset, track_id, stem, float(scores[position]), mix_path, stem_path))
+            results.append(SearchResult(dataset, track_id, matched_stem,
+                                        float(scores[position]), mix_path, stem_path))
         return results

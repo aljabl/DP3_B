@@ -64,6 +64,42 @@ class SearchTests(unittest.TestCase):
             with self.assertRaisesRegex(SearchError, "index is missing"):
                 SimilarityIndex.load(Path(tmp))
 
+    def test_all_stems_uses_matched_stem_audio_and_excludes_source(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracks = (("Self", "drums"), ("DrumMatch", "drums"),
+                      ("VocalMatch", "vocals"), ("BassMatch", "bass"))
+            for position, (name, stem_name) in enumerate(tracks):
+                mix = root / "audio" / "previews" / f"{name}.wav"
+                mix.parent.mkdir(parents=True, exist_ok=True)
+                mix.write_bytes(wav_bytes((position + 1) / 20))
+                stem_path = root / "stems" / "previews" / name / f"{stem_name}.flac"
+                stem_path.parent.mkdir(parents=True, exist_ok=True)
+                sf.write(stem_path, np.zeros(30 * SAMPLE_RATE), SAMPLE_RATE)
+            rows = pd.DataFrame([
+                {"dataset": "previews", "track_id": name, "stem": stem_name,
+                 "status": "ok", "row": position}
+                for position, (name, stem_name) in enumerate(tracks)
+            ])
+            vectors = np.array([[1, 0], [0.8, 0.2], [0.9, 0.1], [0, 1]], np.float32)
+            index = SimilarityIndex(rows, {"timbre": vectors, "rhythm": vectors}, root)
+            source = root / "audio" / "previews" / "Self.wav"
+            upload = inspect_audio(source.name, source.read_bytes())
+            upload.clip_bytes = whole_clip_audio(upload)
+            upload.clip_start_seconds = 0.0
+
+            query = {"timbre": vectors[0], "rhythm": vectors[0]}
+            same_stem = index.search("drums", query, upload=upload)
+            all_stems = index.search("drums", query, upload=upload, all_stems=True)
+
+            self.assertEqual([(result.track_id, result.stem) for result in same_stem],
+                             [("DrumMatch", "drums")])
+            self.assertEqual([result.track_id for result in all_stems],
+                             ["VocalMatch", "DrumMatch", "BassMatch"])
+            self.assertEqual([result.stem_path.name for result in all_stems],
+                             ["vocals.flac", "drums.flac", "bass.flac"])
+            self.assertNotIn("Self", [result.track_id for result in all_stems])
+
     def test_timbre_and_rhythm_contribute_equally(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

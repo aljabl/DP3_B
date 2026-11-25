@@ -280,11 +280,16 @@ def show_song_panel(upload: UploadedAudio, audio_id: str) -> tuple[str | None, l
         selected_stem = show_stems(stems, clip_key)
         if selected_stem is None:
             return None, None
-        searches: dict[tuple[str, str], list[SearchResult]] = st.session_state.setdefault(
+        searches: dict[tuple[str, str, bool], list[SearchResult]] = st.session_state.setdefault(
             "search_results", {}
         )
-        search_key = (clip_key, selected_stem)
         with st.container(key="search_action"):
+            all_stems = st.checkbox(
+                "Search all stem types",
+                key=f"search_all_stems_{clip_key}",
+                help="Include vocals, drums, bass, guitar, piano, and other stems in the results.",
+            )
+            search_key = (clip_key, selected_stem, all_stems)
             label, action = st.columns([0.48, 0.52], gap="small", vertical_alignment="center")
             with label:
                 st.html(
@@ -297,7 +302,8 @@ def show_song_panel(upload: UploadedAudio, audio_id: str) -> tuple[str | None, l
                         try:
                             query = query_descriptors(upload.clip_bytes, stems[selected_stem], selected_stem)
                             searches[search_key] = get_similarity_index().search(
-                                selected_stem, query, upload=upload, limit=3
+                                selected_stem, query, upload=upload, limit=3,
+                                all_stems=all_stems,
                             )
                         except Exception as exc:
                             st.error(f"Could not search this stem: {exc}")
@@ -326,7 +332,10 @@ def show_results_panel(
         for number, result in enumerate(results, 1):
             with st.container(key=f"result_card_{number}"):
                 st.markdown(f"### {number}. {result.title}")
-                st.caption(f"{result.dataset.upper()} · cosine similarity {result.similarity:.3f}")
+                st.caption(
+                    f"{result.dataset.upper()} · {result.stem.capitalize()} stem · "
+                    f"cosine similarity {result.similarity:.3f}"
+                )
                 st.write("Full song")
                 mix_format = "audio/mpeg" if result.mix_path.suffix.lower() == ".mp3" else "audio/wav"
                 st.html(
