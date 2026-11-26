@@ -18,16 +18,30 @@ the full waveform to choose the segment, then save that crop. The player preview
 the selected segment before you separate or save the song.
 Edit **Title for saved audio** to rename the song in the library. To keep it on
 disk, choose **Save song to disk**.
-The app writes it to `data/user_added/`; longer uploads are saved as only the
+The app reads an artist from the audio file's metadata when available and shows
+**Unknown Artist** otherwise. Use **Artist for saved audio** to set or correct
+the artist before saving; it is stored with the song's feature record and shown
+beside the title in search results.
+When a title includes a clear artist credit, such as `Artist - Song` or
+`Song (Artist)`, the app separates it into the title and artist fields.
+Choose **Demucs model** before separating or saving: the six-stem model
+(`htdemucs_6s`, the default) provides vocals, drums, bass, guitar, piano, and
+other; the four-stem model (`htdemucs`) provides vocals, drums, bass, and other.
+When matching four-stem results already exist for the exact clip, a six-stem
+result uses their vocals, drums, bass, and other stems. Otherwise the six-stem
+model supplies all six stems. Running the four-stem model also caches its output
+for later sessions.
+The app writes it to `data/audio/user_added/`; longer uploads are saved as only the
 selected 30-second WAV crop. ALAC clips are also saved as WAV for playback and
-search results. Saving stores all six stems under
-`data/stems/user_added/` and adds their descriptors to the persistent search
-index under `data/index/user_added/`, so the clip can appear in later searches.
+search results. Saving stores the selected model's stems under
+`data/stems/user_added/` and their descriptors under `data/features/user_added/`.
+The search index reads those descriptors so the clip can appear in later searches.
 If separation or feature extraction fails, the save is cancelled. Existing
 filenames are never overwritten.
 For audio separation, the app checks its session memory and matching stems in
-`data/stems/` before running Demucs. New stem results stay in session memory
-until the song is saved to disk.
+`data/stems/` before running Demucs. Four-stem results are also cached under
+`data/stems/uploads/` so a later session can reuse the shared stems. Six-stem
+results remain in session memory until the song is saved to disk.
 After separation, select a stem and search the saved embeddings. The app shows
 the three closest playable songs, using the beat-synchronous chroma and MFCC
 descriptors in `dp3/features.py`.
