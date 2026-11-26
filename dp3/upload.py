@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
+import re
 
 import av
 import numpy as np
@@ -33,10 +34,115 @@ class UploadedAudio:
     clip_bytes: bytes | None = None
     clip_start_seconds: float | None = None
     playback_bytes: bytes | None = None
+    artist: str | None = None
+    title: str | None = None
 
     @property
     def duration_seconds(self) -> float:
         return self.frames / self.sample_rate
+
+    @property
+    def display_artist(self) -> str:
+        return self.artist or "Unknown Artist"
+
+
+def normalize_artist(value: str | None) -> str | None:
+    """Keep a real artist name or represent missing metadata as None."""
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+_TRAILING_CREDIT = re.compile(r"^(?P<title>.+?)\s*\((?P<credit>[^()]*)\)\s*$")
+_TITLE_SEPARATOR = re.compile(r"\s+[-–—]\s+")
+_FEATURED = re.compile(r"^(?:feat\.?|ft\.?|featuring)\s+", re.IGNORECASE)
+_NON_ARTIST_CREDIT = re.compile(
+    r"^(?:live|remix|mix|edit|version|acoustic|instrumental|demo|radio|"
+    r"remaster(?:ed)?|reprise|explicit|clean|mono|stereo|official|cover|"
+    r"karaoke|sped up|slowed)(?:\b|\s|$)", re.IGNORECASE,
+)
+_PRODUCTION_SUFFIX = re.compile(r"\b(?:remix|mix|edit|version|remaster(?:ed)?)$", re.IGNORECASE)
+
+
+def _same_name(left: str, right: str) -> bool:
+    return " ".join(left.casefold().split()) == " ".join(right.casefold().split())
+
+
+def _artist_credit_matches(credit: str, artist: str) -> bool:
+    credit = _FEATURED.sub("", credit).strip()
+    names = re.split(r"\s*(?:,|&|\band\b|\bfeat\.?\b|\bft\.?\b)\s*",
+                     artist, flags=re.IGNORECASE)
+    return any(_same_name(credit, name) for name in (artist, *names) if name)
+
+
+def normalize_title_artist(title: str, artist: str | None) -> tuple[str, str | None]:
+    """Separate clear artist credits from a song title."""
+    title = title.strip()
+    artist = normalize_artist(artist)
+    if artist:
+        title = re.sub(
+            r"\s*[\(\[]([^()\[\]]+)[\)\]]",
+            lambda match: "" if _artist_credit_matches(match[1], artist) else match[0],
+            title,
+        ).strip()
+    match = _TRAILING_CREDIT.fullmatch(title)
+    if match:
+        credit = match["credit"].strip()
+        if (not artist and credit and not _FEATURED.match(credit)
+              and not _NON_ARTIST_CREDIT.match(credit)
+              and not _PRODUCTION_SUFFIX.search(credit)
+              and not re.match(r"^\d{4}\b", credit)):
+            title, artist = match["title"].strip(), credit
+
+    parts = _TITLE_SEPARATOR.split(title, maxsplit=1)
+    if len(parts) == 2 and all(part.strip() for part in parts):
+        left, right = (part.strip() for part in parts)
+        if artist and _artist_credit_matches(left, artist):
+            title = right
+        elif artist and _artist_credit_matches(right, artist):
+            title = left
+        elif not artist:
+            title, artist = right, left
+    return title, artist
+
+
+def song_identity(filename: str, metadata_title: str | None = None,
+                  metadata_artist: str | None = None) -> tuple[str, str | None]:
+    """Prefer embedded title tags while also using filename artist credits."""
+    tagged_title = normalize_artist(metadata_title)
+    if tagged_title and not metadata_artist:
+        parts = _TITLE_SEPARATOR.split(Path(filename).stem, maxsplit=1)
+        if len(parts) == 2 and _same_name(parts[0], tagged_title) and parts[1].strip():
+            return normalize_title_artist(tagged_title, parts[1])
+    filename_title, artist = normalize_title_artist(Path(filename).stem, metadata_artist)
+    title = tagged_title or filename_title
+    return normalize_title_artist(title, artist)
+
+
+def _song_tags_from_container(container) -> tuple[str | None, str | None]:
+    title = artist = None
+    for tags in (container.metadata, *(stream.metadata for stream in container.streams.audio)):
+        for key, value in tags.items():
+            key = key.casefold()
+            if key in {"artist", "tpe1"} and artist is None:
+                artist = normalize_artist(value)
+            elif key in {"title", "tit2"} and title is None:
+                title = normalize_artist(value)
+    return title, artist
+
+
+def song_tags_from_media(source: bytes | Path) -> tuple[str | None, str | None]:
+    """Read title and artist tags without decoding the audio stream."""
+    try:
+        with av.open(BytesIO(source) if isinstance(source, bytes) else str(source)) as container:
+            return _song_tags_from_container(container)
+    except (av.FFmpegError, OSError, ValueError):
+        return None, None
+
+
+def artist_from_media(source: bytes | Path) -> str | None:
+    """Read an artist tag without decoding the audio stream."""
+    return song_tags_from_media(source)[1]
 
 
 def _audio_buffer(data: bytes, name: str) -> BytesIO:
@@ -73,7 +179,10 @@ def inspect_audio(name: str, data: bytes) -> UploadedAudio:
                     frames = sum(frame.samples for frame in container.decode(stream))
                 if frames <= 0:
                     raise AudioUploadError("The selected file contains no playable audio.")
-                return UploadedAudio(name, data, sample_rate, frames, MIME_TYPES[suffix])
+                tagged_title, tagged_artist = _song_tags_from_container(container)
+                title, artist = song_identity(name, tagged_title, tagged_artist)
+                return UploadedAudio(name, data, sample_rate, frames, MIME_TYPES[suffix],
+                                     artist=artist, title=title)
         except AudioUploadError:
             raise
         except (av.FFmpegError, OSError, ValueError) as exc:
@@ -83,12 +192,16 @@ def inspect_audio(name: str, data: bytes) -> UploadedAudio:
         with sf.SoundFile(_audio_buffer(data, name)) as audio:
             if audio.samplerate <= 0 or audio.frames <= 0 or audio.channels <= 0:
                 raise AudioUploadError("The selected file contains no playable audio.")
+            tagged_title, tagged_artist = song_tags_from_media(data)
+            title, artist = song_identity(name, tagged_title, tagged_artist)
             return UploadedAudio(
                 name=name,
                 source_bytes=data,
                 sample_rate=audio.samplerate,
                 frames=audio.frames,
                 mime_type=MIME_TYPES[suffix],
+                artist=artist,
+                title=title,
             )
     except (sf.LibsndfileError, OSError) as exc:
         raise AudioUploadError("This file could not be decoded as audio.") from exc

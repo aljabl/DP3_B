@@ -25,7 +25,11 @@ def features_dir(dataset: str) -> Path:
 
 
 # Separation
-SEPARATION_MODEL = "htdemucs_6s"    # vocals, drums, bass, guitar, piano, other
+SEPARATION_MODEL = "htdemucs_6s"    # default for offline builds and uploads
+SEPARATION_MODELS = {
+    "htdemucs_6s": ("vocals", "drums", "bass", "guitar", "piano", "other"),
+    "htdemucs": ("vocals", "drums", "bass", "other"),
+}
 
 # Features
 ANALYSIS_SR = 22050                 # stems are stored at 44.1 kHz, analysed at this rate

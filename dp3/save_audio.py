@@ -13,7 +13,7 @@ import soundfile as sf
 from . import config
 from .facets import FacetPolicy
 from .features import FeatureExtractor, to_analysis
-from .stem_service import DATA_ROOT, STEM_NAMES, load_or_separate
+from .stem_service import DATA_ROOT, load_or_separate, stem_cache_key, stem_names
 from .upload import (
     CLIP_SECONDS,
     CLIP_TOLERANCE_SECONDS,
@@ -22,11 +22,13 @@ from .upload import (
     UploadedAudio,
     crop_audio,
     inspect_audio,
+    normalize_artist,
+    normalize_title_artist,
     whole_clip_audio,
 )
 
 
-USER_ADDED_DIR = Path(__file__).resolve().parents[1] / config.DATA / "user_added"
+USER_ADDED_DIR = Path(__file__).resolve().parents[1] / config.audio_dir("user_added")
 INVALID_TITLE_CHARS = frozenset('<>:"/\\|?*')
 
 
@@ -77,6 +79,8 @@ def save_uploaded_audio(
     directory: Path = USER_ADDED_DIR,
 ) -> Path:
     """Write the selected clip without overwriting an existing song."""
+    title, upload.artist = normalize_title_artist(title, upload.artist)
+    upload.title = title
     path, data = _saved_audio(upload, title, directory)
     directory.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as destination:
@@ -97,13 +101,16 @@ def save_and_index_upload(
     *,
     data_root: Path = DATA_ROOT,
     extractor_factory=FeatureExtractor,
+    model_name: str = config.SEPARATION_MODEL,
 ) -> Path:
     """Separate and analyze a clip, then publish its audio and search entry.
 
-    The index entry is committed last. If any step fails, remove the new song
-    and stems so the user can retry the save without a partial result.
+    The feature record is committed last. If any step fails, remove the new
+    song and stems so the user can retry the save without a partial result.
     """
-    song_dir = data_root / "user_added"
+    title, upload.artist = normalize_title_artist(title, upload.artist)
+    upload.title = title
+    song_dir = data_root / "audio" / "user_added"
     song_path, song_bytes = _saved_audio(upload, title, song_dir)
     if song_path.exists():
         raise FileExistsError(song_path)
@@ -111,15 +118,17 @@ def save_and_index_upload(
     saved_upload = inspect_audio(song_path.name, song_bytes)
     saved_upload.clip_bytes = whole_clip_audio(saved_upload)
     saved_upload.clip_start_seconds = 0.0
+    names = stem_names(model_name)
     stems, _origin = load_or_separate(
-        saved_upload, ram_cache, separator_factory, data_root=data_root
+        saved_upload, ram_cache, separator_factory, data_root=data_root,
+        model_name=model_name,
     )
-    if set(stems) != set(STEM_NAMES):
-        raise ValueError("The song must have all six stems before it can be saved.")
+    if set(stems) != set(names):
+        raise ValueError(f"The song must have all {len(names)} stems before it can be saved.")
 
     mix, mix_rate = _analysis_audio(song_bytes)
     stem_audio = {}
-    for name in STEM_NAMES:
+    for name in names:
         audio, rate = _analysis_audio(stems[name])
         stem_audio[name] = to_analysis(audio, rate)
     features = extractor_factory().analyze(to_analysis(mix, mix_rate), stem_audio)
@@ -127,7 +136,7 @@ def save_and_index_upload(
     facets = policy.indexed_facets()
     rows = []
     vectors = {facet: [] for facet in facets}
-    for name in STEM_NAMES:
+    for name in names:
         result = features["stems"][name]
         row = {"stem": name, "status": result["status"],
                "rms_db": float(result["rms_db"]), "row": -1}
@@ -141,25 +150,33 @@ def save_and_index_upload(
                 vectors[facet].append(np.asarray(vector, dtype=np.float32))
         rows.append(row)
     if not any(row["status"] == "ok" for row in rows):
-        raise ValueError("All six stems are too quiet to add to the search index.")
+        raise ValueError("All stems are too quiet to add to the search index.")
 
     track_id = uuid4().hex
     stem_dir = data_root / "stems" / "user_added" / track_id
-    index_dir = data_root / "index" / "user_added"
-    entry_dir = index_dir / track_id
+    features_dir = data_root / "features" / "user_added"
+    entry_dir = features_dir / track_id
     created_song = False
     try:
         song_path = save_uploaded_audio(upload, title, directory=song_dir)
         created_song = True
         stem_dir.mkdir(parents=True)
-        for name in STEM_NAMES:
+        for name in names:
             audio, rate = _analysis_audio(stems[name])
             sf.write(stem_dir / f"{name}.flac", audio.T, rate, subtype="PCM_16")
-        index_dir.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix=f".{track_id}-", dir=index_dir) as temp:
+        features_dir.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix=f".{track_id}-", dir=features_dir) as temp:
             folder = Path(temp)
             (folder / "meta.json").write_text(json.dumps({
                 "song_filename": song_path.name,
+                "title": title,
+                "artist": normalize_artist(upload.artist),
+                "model_name": model_name,
+                "shared_stems_model": (
+                    "htdemucs" if model_name == "htdemucs_6s"
+                    and stem_cache_key(saved_upload, "htdemucs") in ram_cache
+                    else model_name
+                ),
                 "rows": rows,
                 "meter_beats": features.get("meter_beats"),
                 "meter_confidence": features.get("meter_confidence", 0.0),

@@ -1,6 +1,7 @@
 """Saving user uploads keeps the selected 30-second clip and chosen title."""
 
 from io import BytesIO
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -11,9 +12,9 @@ import pandas as pd
 import soundfile as sf
 
 from dp3 import config
-from dp3.save_audio import save_and_index_upload, save_uploaded_audio
+from dp3.save_audio import USER_ADDED_DIR, save_and_index_upload, save_uploaded_audio
 from dp3.search import SimilarityIndex
-from dp3.stem_service import STEM_NAMES, load_or_separate
+from dp3.stem_service import STEM_NAMES, load_or_separate, stem_names
 from dp3.upload import AudioUploadError, crop_audio, inspect_audio, whole_clip_audio
 
 
@@ -28,6 +29,125 @@ def make_upload(seconds: float):
 
 
 class SaveAudioTests(unittest.TestCase):
+    def test_saved_six_stems_reuse_previous_four_stem_estimates(self) -> None:
+        upload = make_upload(30)
+        upload.clip_bytes = whole_clip_audio(upload)
+        upload.clip_start_seconds = 0.0
+        calls = []
+
+        class Separator:
+            sample_rate = SAMPLE_RATE
+
+            def __init__(self, model_name):
+                self.model_name = model_name
+
+            def separate_array(self, audio, sample_rate):
+                calls.append(self.model_name)
+                level = 0.1 if self.model_name == "htdemucs" else 0.5
+                return {name: np.full((1, audio.shape[1]), level, np.float32)
+                        for name in stem_names(self.model_name)}, 0.0
+
+        class Extractor:
+            def analyze(self, mix, stems):
+                return {"stems": {
+                    name: {"status": "ok", "rms_db": -2.0,
+                           "timbre": np.ones(config.TIMBRE_DIM, np.float32),
+                           "rhythm": np.ones(config.RHYTHM_DIM, np.float32)}
+                    for name in stems
+                }}
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            factory = Separator
+            load_or_separate(upload, {}, factory, data_root=root, model_name="htdemucs")
+            saved = save_and_index_upload(
+                upload, "Shared Stems", {}, factory, data_root=root,
+                extractor_factory=Extractor, model_name="htdemucs_6s",
+            )
+            self.assertEqual(calls, ["htdemucs", "htdemucs_6s"])
+            folder = next((root / "features" / "user_added").iterdir())
+            meta = json.loads((folder / "meta.json").read_text())
+            self.assertEqual(meta["shared_stems_model"], "htdemucs")
+            stems_dir = root / "stems" / "user_added" / folder.name
+            vocals = sf.read(stems_dir / "vocals.flac")[0]
+            guitar = sf.read(stems_dir / "guitar.flac")[0]
+            self.assertAlmostEqual(float(vocals.mean()), 0.1, places=3)
+            self.assertAlmostEqual(float(guitar.mean()), 0.5, places=3)
+            self.assertTrue(saved.is_file())
+
+    def test_four_stem_upload_is_saved_and_indexed(self) -> None:
+        upload = make_upload(30)
+        upload.artist = "Four Stem Artist"
+        upload.clip_bytes = whole_clip_audio(upload)
+        upload.clip_start_seconds = 0.0
+        model_name = "htdemucs"
+        names = stem_names(model_name)
+
+        class Separator:
+            sample_rate = SAMPLE_RATE
+
+            def separate_array(self, audio, sample_rate):
+                return {name: np.full((1, audio.shape[1]), 0.1, np.float32)
+                        for name in names}, 0.0
+
+        class Extractor:
+            def analyze(self, mix, stems):
+                return {"stems": {
+                    name: {"status": "ok", "rms_db": -2.0,
+                           "timbre": np.full(config.TIMBRE_DIM, 2, np.float32),
+                           "rhythm": np.full(config.RHYTHM_DIM, 2, np.float32)}
+                    for name in stems
+                }}
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index_dir = root / "index"
+            index_dir.mkdir()
+            pd.DataFrame([{
+                "dataset": "previews", "track_id": "Existing", "stem": "drums",
+                "status": "ok", "row": 0,
+            }]).to_csv(index_dir / "embeddings_index.csv", index=False)
+            np.savez_compressed(index_dir / "embeddings.npz",
+                                timbre=np.ones((1, config.TIMBRE_DIM), np.float32),
+                                rhythm=np.ones((1, config.RHYTHM_DIM), np.float32))
+            saved = save_and_index_upload(
+                upload, "Four Stem Song (Four Stem Artist)", {}, lambda model: Separator(), data_root=root,
+                extractor_factory=Extractor, model_name=model_name,
+            )
+            self.assertEqual(saved.name, "Four Stem Song.wav")
+            self.assertEqual(saved.parent, root / "audio" / "user_added")
+            self.assertFalse((index_dir / "user_added").exists())
+            index = SimilarityIndex.load(root)
+            rows = index.rows[index.rows["dataset"] == "user_added"]
+            self.assertEqual(set(rows["stem"]), set(names))
+            track_id = rows.iloc[0]["track_id"]
+            features_dir = root / "features" / "user_added" / track_id
+            self.assertTrue((features_dir / "meta.json").is_file())
+            self.assertTrue((features_dir / "vectors.npz").is_file())
+            self.assertEqual(json.loads((features_dir / "meta.json").read_text())["artist"],
+                             "Four Stem Artist")
+            self.assertEqual(json.loads((features_dir / "meta.json").read_text())["title"],
+                             "Four Stem Song")
+            self.assertEqual(index.user_artists[track_id], "Four Stem Artist")
+            query = {"timbre": np.full(config.TIMBRE_DIM, 2, np.float32),
+                     "rhythm": np.full(config.RHYTHM_DIM, 2, np.float32)}
+            results = index.search("drums", query)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].artist, "Four Stem Artist")
+            self.assertEqual(results[0].display_artist, "Four Stem Artist")
+            self.assertEqual(results[0].title, "Four Stem Song")
+            stem_dir = root / "stems" / "user_added" / track_id
+            self.assertEqual({path.stem for path in stem_dir.glob("*.flac")}, set(names))
+            reupload = inspect_audio(saved.name, saved.read_bytes())
+            reupload.clip_bytes = whole_clip_audio(reupload)
+            reupload.clip_start_seconds = 0.0
+            disk_stems, origin = load_or_separate(
+                reupload, {}, Mock(side_effect=AssertionError("Demucs was called")),
+                data_root=root, model_name=model_name,
+            )
+            self.assertEqual(origin, "disk")
+            self.assertEqual(set(disk_stems), set(names))
+
     def test_saved_crop_has_six_stems_and_can_be_a_search_result(self) -> None:
         upload = make_upload(31)
         upload.clip_bytes = crop_audio(upload, 1.0)
@@ -66,10 +186,12 @@ class SaveAudioTests(unittest.TestCase):
             separator = Separator()
             cache = {}
             saved = save_and_index_upload(
-                upload, "My Saved Crop", cache, lambda: separator,
+                upload, "My Saved Crop", cache, lambda model: separator,
                 data_root=root, extractor_factory=Extractor,
             )
             self.assertEqual(separator.calls, 1)
+            self.assertEqual(saved.parent, root / "audio" / "user_added")
+            self.assertFalse((base_dir / "user_added").exists())
             self.assertEqual(saved.read_bytes(), upload.clip_bytes)
             index = SimilarityIndex.load(root)
             user_rows = index.rows[index.rows["dataset"] == "user_added"]
@@ -86,6 +208,8 @@ class SaveAudioTests(unittest.TestCase):
             self.assertEqual(results[0].title, "My Saved Crop")
             self.assertEqual(results[0].mix_path, saved)
             self.assertEqual(results[0].stem_path.name, "drums.flac")
+            self.assertIsNone(results[0].artist)
+            self.assertEqual(results[0].display_artist, "Unknown Artist")
             self.assertEqual(index.search("drums", query, upload=upload), [])
             reupload = inspect_audio(saved.name, saved.read_bytes())
             reupload.clip_bytes = whole_clip_audio(reupload)
@@ -100,6 +224,8 @@ class SaveAudioTests(unittest.TestCase):
                 save_and_index_upload(upload, "My Saved Crop", cache, Mock(), data_root=root)
 
     def test_exact_upload_uses_edited_title_without_overwriting(self) -> None:
+        self.assertEqual(USER_ADDED_DIR, Path(__file__).resolve().parents[1] /
+                         "data" / "audio" / "user_added")
         upload = make_upload(30)
         upload.clip_bytes = whole_clip_audio(upload)
         with TemporaryDirectory() as temporary:

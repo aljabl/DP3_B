@@ -12,7 +12,8 @@ import soundfile as sf
 from .features import FeatureExtractor, to_analysis
 from .stem_service import DATA_ROOT
 from .upload import (CLIP_SECONDS, CLIP_TOLERANCE_SECONDS, UploadedAudio,
-                     bytes_match_file, source_matches_file)
+                     bytes_match_file, song_identity, song_tags_from_media,
+                     source_matches_file)
 from .facets import FacetPolicy
 from . import config
 from .rhythm import RHYTHM_BLOCKS
@@ -30,10 +31,17 @@ class SearchResult:
     similarity: float
     mix_path: Path
     stem_path: Path
+    artist: str | None = None
+    song_title: str | None = None
 
     @property
     def title(self) -> str:
-        return self.mix_path.stem if self.dataset != "fma" else self.track_id.partition("_")[2]
+        return self.song_title or (self.mix_path.stem if self.dataset != "fma"
+                                   else self.track_id.partition("_")[2])
+
+    @property
+    def display_artist(self) -> str:
+        return self.artist or "Unknown Artist"
 
 
 def _read_audio(data: bytes) -> tuple[np.ndarray, int]:
@@ -62,11 +70,15 @@ class SimilarityIndex:
 
     def __init__(self, rows: pd.DataFrame, vectors: dict[str, np.ndarray], data_root: Path,
                  policy: FacetPolicy | None = None,
-                 user_source_paths: dict[str, Path] | None = None):
+                 user_source_paths: dict[str, Path] | None = None,
+                 user_artists: dict[str, str | None] | None = None,
+                 user_titles: dict[str, str] | None = None):
         self.rows = rows
         self.vectors = vectors
         self.data_root = data_root
         self.policy = policy or FacetPolicy()
+        self.user_artists = user_artists or {}
+        self.user_titles = user_titles or {}
         self.source_paths = {}
         for dataset in ("previews", "harmonix"):
             for path in (data_root / "audio" / dataset).glob("*.wav"):
@@ -88,10 +100,12 @@ class SimilarityIndex:
             raise SearchError("The stem search index is missing. Run the table build stage first.") from exc
 
         user_paths = {}
+        user_artists = {}
+        user_titles = {}
         additions = []
-        user_index_dir = index_dir / "user_added"
+        user_features_dir = data_root / "features" / "user_added"
         indexed_ids = set(rows.loc[rows["dataset"] == "user_added", "track_id"].astype(str))
-        for folder in sorted(user_index_dir.iterdir()) if user_index_dir.is_dir() else ():
+        for folder in sorted(user_features_dir.iterdir()) if user_features_dir.is_dir() else ():
             if not folder.is_dir() or folder.name in indexed_ids:
                 continue
             try:
@@ -99,7 +113,7 @@ class SimilarityIndex:
                 filename = meta["song_filename"]
                 if Path(filename).name != filename:
                     continue
-                song_path = data_root / "user_added" / filename
+                song_path = data_root / "audio" / "user_added" / filename
                 if not song_path.is_file():
                     continue
                 with np.load(folder / "vectors.npz", allow_pickle=False) as saved:
@@ -114,7 +128,7 @@ class SimilarityIndex:
                 for item in meta["rows"]:
                     local_row = int(item["row"])
                     if local_row < -1 or local_row >= count:
-                        raise ValueError("Invalid row in saved upload index")
+                        raise ValueError("Invalid row in saved upload features")
                     entry_rows.append({
                         "dataset": "user_added", "track_id": folder.name,
                         "stem": item["stem"], "status": item["status"],
@@ -132,9 +146,15 @@ class SimilarityIndex:
             for facet in policy.indexed_facets():
                 vectors[facet] = np.concatenate((vectors[facet], extra[facet]))
             user_paths[folder.name] = song_path
+            tagged_title, tagged_artist = ((None, None) if "title" in meta and "artist" in meta
+                                           else song_tags_from_media(song_path))
+            user_titles[folder.name], user_artists[folder.name] = song_identity(
+                song_path.name, meta.get("title") or tagged_title,
+                meta.get("artist", tagged_artist),
+            )
         if additions:
             rows = pd.concat((rows, pd.DataFrame(additions)), ignore_index=True)
-        return cls(rows, vectors, data_root, policy, user_paths)
+        return cls(rows, vectors, data_root, policy, user_paths, user_artists, user_titles)
 
     def _mix_path(self, dataset: str, track_id: str) -> Path | None:
         if dataset == "fma":
@@ -247,6 +267,15 @@ class SimilarityIndex:
                 ))
             ):
                 continue
+            if dataset == "user_added":
+                title = self.user_titles.get(track_id)
+                artist = self.user_artists.get(track_id)
+            else:
+                tagged_title, tagged_artist = song_tags_from_media(mix_path)
+                source_name = (f"{track_id.partition('_')[2]}{mix_path.suffix}"
+                               if dataset == "fma" else mix_path.name)
+                title, artist = song_identity(source_name, tagged_title, tagged_artist)
             results.append(SearchResult(dataset, track_id, matched_stem,
-                                        float(scores[position]), mix_path, stem_path))
+                                        float(scores[position]), mix_path, stem_path,
+                                        artist, title))
         return results

@@ -28,6 +28,9 @@ STYLE = """
   .st-key-results_panel { background: #160f18; }
   .eyebrow { color: #c6b3c5; font-size: .95rem; font-weight: 800; letter-spacing: .12em; }
   .panel-title { color: #f6edf4; font-size: 1.65rem; font-weight: 750; line-height: 1.15; margin: .2rem 0 .45rem; }
+  .artist-heading { color: #c6b3c5; font-size: 1rem; font-weight: 600; margin: 0 0 .8rem; }
+  .library-artist { font-size: .85rem; margin: -.2rem 0 .35rem; padding-left: .45rem; }
+  .result-title { color: #f6edf4; font-size: 1.25rem; font-weight: 700; margin: 0 0 .2rem; }
   .st-key-song_panel .panel-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .stem-resize-handle {
     position: fixed; z-index: 100; width: 12px;

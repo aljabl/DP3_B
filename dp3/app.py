@@ -6,10 +6,11 @@ from pathlib import Path
 
 import streamlit as st
 
+from dp3 import config
 from dp3.crop_window import crop_window, format_crop_time, waveform_peaks
 from dp3.save_audio import save_and_index_upload
 from dp3.search import SimilarityIndex, SearchResult, query_descriptors
-from dp3.stem_service import DATA_ROOT, load_or_separate, stem_cache_key
+from dp3.stem_service import DATA_ROOT, load_or_separate, stem_cache_key, stem_names
 from dp3.ui import EMPTY_MAP, apply_style, install_stem_pane_resizer, waveform_player_html
 from dp3.upload import (
     CLIP_SECONDS,
@@ -18,6 +19,8 @@ from dp3.upload import (
     UploadedAudio,
     crop_audio,
     inspect_audio,
+    normalize_artist,
+    normalize_title_artist,
     source_audio_for_playback,
     whole_clip_audio,
 )
@@ -27,11 +30,11 @@ DISPLAY_STEMS = ("vocals", "drums", "bass", "other", "guitar", "piano")
 
 
 @st.cache_resource
-def get_separator():
+def get_separator(model_name: str):
     """Load Demucs only when an uncached clip needs separation."""
     from dp3.separation import StemSeparator
 
-    return StemSeparator()
+    return StemSeparator(model_name)
 
 
 @st.cache_resource
@@ -44,8 +47,8 @@ def get_similarity_index() -> SimilarityIndex:
     folder = DATA_ROOT / "index"
     version = tuple((folder / name).stat().st_mtime_ns if (folder / name).exists() else 0
                     for name in ("embeddings.npz", "embeddings_index.csv"))
-    user_index = folder / "user_added"
-    return _load_similarity_index((*version, user_index.stat().st_mtime_ns if user_index.exists() else 0))
+    user_features = DATA_ROOT / "features" / "user_added"
+    return _load_similarity_index((*version, user_features.stat().st_mtime_ns if user_features.exists() else 0))
 
 
 def add_uploads(uploads: dict[str, UploadedAudio], files: list) -> list[str]:
@@ -78,10 +81,32 @@ def _select_stem(clip_key: str, stem: str) -> None:
     st.session_state[f"selected_stem_{clip_key}"] = stem
 
 
+def _update_artist(upload: UploadedAudio, audio_id: str) -> None:
+    upload.artist = normalize_artist(st.session_state[f"save_artist_{audio_id}"])
+    title_key = f"save_title_{audio_id}"
+    current_title = st.session_state.get(title_key, upload.title or Path(upload.name).stem)
+    clean_title, _ = normalize_title_artist(current_title, upload.artist)
+    if clean_title != current_title:
+        upload.title = clean_title
+        st.session_state[title_key] = clean_title
+
+
+def _update_title(upload: UploadedAudio, audio_id: str) -> None:
+    title_key = f"save_title_{audio_id}"
+    raw_title = st.session_state[title_key].strip()
+    if not raw_title:
+        return
+    title, artist = normalize_title_artist(raw_title, upload.artist)
+    upload.title = title
+    upload.artist = artist
+    st.session_state[title_key] = title
+    st.session_state[f"save_artist_{audio_id}"] = artist or ""
+
+
 def display_title(upload: UploadedAudio, audio_id: str) -> str:
     """Use the edited save title throughout the current session."""
     edited = st.session_state.get(f"save_title_{audio_id}", "").strip()
-    return edited or Path(upload.name).stem
+    return edited or upload.title or Path(upload.name).stem
 
 
 def _library_audio(upload: UploadedAudio, audio_id: str) -> tuple[bytes, str]:
@@ -113,6 +138,7 @@ def show_library(uploads: dict[str, UploadedAudio], selected_id: str | None) -> 
             (audio_id, upload)
             for audio_id, upload in uploads.items()
             if filter_text in display_title(upload, audio_id).casefold()
+            or filter_text in upload.display_artist.casefold()
         ]
         with st.container(key="library_song_list"):
             if not uploads:
@@ -133,6 +159,8 @@ def show_library(uploads: dict[str, UploadedAudio], selected_id: str | None) -> 
                             use_container_width=True,
                             type="tertiary",
                         )
+                        st.html(f'<h3 class="artist-heading library-artist">'
+                                f'{escape(upload.display_artist)}</h3>')
                     with duration:
                         minutes, seconds = divmod(round(upload.duration_seconds), 60)
                         st.caption(f"{minutes}:{seconds:02d}")
@@ -145,7 +173,7 @@ def show_library(uploads: dict[str, UploadedAudio], selected_id: str | None) -> 
                             waveform_player_html(
                                 audio,
                                 key=f"library_{audio_id}",
-                                label=f"{display_title(upload, audio_id)} in library",
+                                label=f"{display_title(upload, audio_id)} by {upload.display_artist} in library",
                                 mime_type=audio_format,
                                 bars=28,
                                 compact=True,
@@ -174,7 +202,9 @@ def show_library(uploads: dict[str, UploadedAudio], selected_id: str | None) -> 
 def show_song_audio(upload: UploadedAudio, audio_id: str) -> bool:
     """Render playback and return whether the selected crop is saved."""
     title = escape(display_title(upload, audio_id))
-    st.html(f'<div class="eyebrow">SONG</div><h1 class="panel-title">{title}</h1>')
+    artist = escape(upload.display_artist)
+    st.html(f'<div class="eyebrow">SONG</div><h1 class="panel-title">{title}</h1>'
+            f'<h2 class="artist-heading">{artist}</h2>')
 
     crop_preview = None
     selected_crop_saved = upload.clip_bytes is not None
@@ -207,7 +237,7 @@ def show_song_audio(upload: UploadedAudio, audio_id: str) -> bool:
             waveform_player_html(
                 audio,
                 key=f"mix_{audio_id}",
-                label=display_title(upload, audio_id),
+                label=f"{display_title(upload, audio_id)} by {upload.display_artist}",
                 mime_type=audio_format,
                 bars=42,
             ),
@@ -228,12 +258,35 @@ def show_song_audio(upload: UploadedAudio, audio_id: str) -> bool:
             upload.clip_start_seconds = start
             st.rerun()
 
+    model_name = st.selectbox(
+        "Demucs model",
+        options=tuple(config.SEPARATION_MODELS),
+        format_func=lambda model: f"{len(stem_names(model))} stems ({model})",
+        key=f"demucs_model_{audio_id}",
+        help="The 4-stem model provides vocals, drums, bass, and other. "
+             "The 6-stem model also provides guitar and piano.",
+    )
     with st.container(key="save_song_action"):
+        title_key = f"save_title_{audio_id}"
+        artist_key = f"save_artist_{audio_id}"
+        if title_key not in st.session_state:
+            st.session_state[title_key] = upload.title or Path(upload.name).stem
+        if artist_key not in st.session_state:
+            st.session_state[artist_key] = upload.artist or ""
         title_to_save = st.text_input(
             "Title for saved audio",
-            value=Path(upload.name).stem,
-            key=f"save_title_{audio_id}",
-            help="The title becomes the filename in data/user_added.",
+            key=title_key,
+            help="The title becomes the filename in data/audio/user_added.",
+            on_change=_update_title,
+            args=(upload, audio_id),
+            persist_state="session",
+        )
+        st.text_input(
+            "Artist for saved audio",
+            key=artist_key,
+            placeholder="Unknown Artist",
+            on_change=_update_artist,
+            args=(upload, audio_id),
             persist_state="session",
         )
         if st.button(
@@ -243,29 +296,32 @@ def show_song_audio(upload: UploadedAudio, audio_id: str) -> bool:
             help="Save the selected 30-second crop first." if not selected_crop_saved else None,
             width="stretch",
         ):
-            with st.spinner("Saving the song, separating six stems, and indexing them..."):
+            with st.spinner(f"Saving the song, separating {len(stem_names(model_name))} stems, and indexing them..."):
                 try:
                     stem_results = st.session_state.setdefault("stem_results", {})
                     saved_path = save_and_index_upload(
-                        upload, title_to_save, stem_results, get_separator
+                        upload, title_to_save, stem_results, get_separator,
+                        model_name=model_name,
                     )
                 except FileExistsError:
-                    st.warning("A song with that title already exists in data/user_added. Choose another title.")
+                    st.warning("A song with that title already exists in data/audio/user_added. Choose another title.")
                 except Exception as exc:
                     st.error(f"Could not save and index this song: {exc}")
                 else:
                     if upload.duration_seconds > CLIP_SECONDS and saved_path.suffix == ".wav":
                         upload.clip_bytes = saved_path.read_bytes()
-                    st.success(f"Saved {saved_path.name}, its six stems, and its search entry.")
+                    st.success(f"Saved {saved_path.name}, its {len(stem_names(model_name))} stems, and its search entry.")
     return selected_crop_saved
 
 
 def show_stems(stems: dict[str, bytes], clip_key: str) -> str | None:
-    """Show six selectable stems with on-demand playback."""
+    """Show the selected model's stems with on-demand playback."""
     selected = st.session_state.get(f"selected_stem_{clip_key}")
     st.html('<div class="eyebrow stems-heading">STEMS</div>')
 
     for stem in DISPLAY_STEMS:
+        if stem not in stems:
+            continue
         row_key = "selected_stem_row" if stem == selected else f"stem_row_{stem}"
         with st.container(key=row_key, gap="xxsmall"):
             label, player = st.columns(
@@ -301,14 +357,18 @@ def show_song_panel(upload: UploadedAudio, audio_id: str) -> tuple[str | None, l
         if not show_song_audio(upload, audio_id):
             return None, None
 
-        clip_key = stem_cache_key(upload)
+        model_name = st.session_state[f"demucs_model_{audio_id}"]
+        clip_key = stem_cache_key(upload, model_name)
         stem_results: dict[str, dict[str, bytes]] = st.session_state.setdefault("stem_results", {})
         stems = stem_results.get(clip_key)
         if stems is None:
-            if st.button("Separate into six stems", key=f"separate_{audio_id}", use_container_width=True):
+            if st.button(f"Separate into {len(stem_names(model_name))} stems",
+                         key=f"separate_{audio_id}", use_container_width=True):
                 with st.spinner("Checking cached stems and running Demucs if needed..."):
                     try:
-                        load_or_separate(upload, stem_results, get_separator)
+                        load_or_separate(upload, stem_results,
+                                         get_separator,
+                                         model_name=model_name)
                     except Exception as exc:
                         st.error(f"Could not separate this clip: {exc}")
                     else:
@@ -333,7 +393,7 @@ def show_song_panel(upload: UploadedAudio, audio_id: str) -> tuple[str | None, l
                 all_stems = st.checkbox(
                     "Search all stem types",
                     key=f"search_all_stems_{clip_key}",
-                    help="Include vocals, drums, bass, guitar, piano, and other stems in the results.",
+                    help="Include every stem type available in the saved search index.",
                     persist_state="session",
                     wrap=True,
                 )
@@ -367,6 +427,8 @@ def show_results_panel(
             if selected_stem else "Similar sounds"
         )
         st.html('<div class="eyebrow">RESULTS</div>' f'<h2 class="panel-title">{heading}</h2>')
+        if selected_stem and upload is not None:
+            st.html(f'<h3 class="artist-heading">{escape(upload.display_artist)}</h3>')
         if results is None:
             st.html(EMPTY_MAP)
             return
@@ -375,7 +437,8 @@ def show_results_panel(
             return
         for number, result in enumerate(results, 1):
             with st.container(key=f"result_card_{number}"):
-                st.markdown(f"### {number}. {result.title}")
+                st.html(f'<h3 class="result-title">{number}. {escape(result.title)}</h3>'
+                        f'<h4 class="artist-heading">{escape(result.display_artist)}</h4>')
                 st.caption(
                     f"{result.dataset.upper()} · {result.stem.capitalize()} stem · "
                     f"cosine similarity {result.similarity:.3f}"
@@ -386,7 +449,7 @@ def show_results_panel(
                     waveform_player_html(
                         result.mix_path.read_bytes(),
                         key=f"result_{number}_{result.dataset}_{result.track_id}_mix",
-                        label=f"{result.title} full song",
+                        label=f"{result.title} by {result.display_artist} full song",
                         mime_type=mix_format,
                         bars=48,
                     ),
@@ -397,7 +460,7 @@ def show_results_panel(
                     waveform_player_html(
                         result.stem_path.read_bytes(),
                         key=f"result_{number}_{result.dataset}_{result.track_id}_{result.stem}",
-                        label=f"{result.title} {result.stem} stem",
+                        label=f"{result.title} by {result.display_artist} {result.stem} stem",
                         mime_type="audio/flac",
                         bars=48,
                     ),

@@ -12,7 +12,8 @@ from streamlit.testing.v1 import AppTest
 
 from dp3.save_audio import save_uploaded_audio
 from dp3.crop_window import waveform_peaks
-from dp3.upload import AudioUploadError, crop_audio, inspect_audio, source_audio_for_playback
+from dp3.upload import (AudioUploadError, crop_audio, inspect_audio, song_identity,
+                        source_audio_for_playback)
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "dp3" / "app.py"
@@ -27,11 +28,16 @@ def audio_bytes(seconds: int, *, format: str = "WAV") -> bytes:
 
 
 def alac_bytes(seconds: int, *, sample_rate: int = SAMPLE_RATE,
-               container_format: str = "ipod") -> bytes:
+               container_format: str = "ipod", artist: str | None = None,
+               title: str | None = None) -> bytes:
     """Encode a real, seekable ALAC/M4A fixture entirely in memory."""
     output = BytesIO()
     tone = np.sin(2 * np.pi * 440 * np.arange(sample_rate) / sample_rate)
     with av.open(output, mode="w", format=container_format) as container:
+        if artist:
+            container.metadata["artist"] = artist
+        if title:
+            container.metadata["title"] = title
         stream = container.add_stream("alac", rate=sample_rate)
         stream.layout = "mono"
         for second in range(seconds):
@@ -46,6 +52,44 @@ def alac_bytes(seconds: int, *, sample_rate: int = SAMPLE_RATE,
 
 
 class UploadTests(unittest.TestCase):
+    def test_filename_artist_is_split_from_title(self) -> None:
+        examples = (
+            ("Boy Afraid (Saro).wav", "Boy Afraid", "Saro"),
+            ("Artist - Song.wav", "Song", "Artist"),
+            ("The Thizzle Dance - DJ Vlad Mix (DJ Vlad, Mac Dre).wav",
+             "The Thizzle Dance - DJ Vlad Mix", "DJ Vlad, Mac Dre"),
+            ("Song (Live).wav", "Song (Live)", None),
+            ("Song (2011 Remaster).wav", "Song (2011 Remaster)", None),
+            ("Song (Artist Remix).wav", "Song (Artist Remix)", None),
+            ("Lava Lamps (feat. Beekwilder).wav",
+             "Lava Lamps (feat. Beekwilder)", None),
+        )
+        source = audio_bytes(30)
+        for filename, title, artist in examples:
+            with self.subTest(filename=filename):
+                upload = inspect_audio(filename, source)
+                self.assertEqual(upload.title, title)
+                self.assertEqual(upload.artist, artist)
+
+    def test_metadata_artist_is_removed_from_embedded_title(self) -> None:
+        upload = inspect_audio("opaque.m4a", alac_bytes(
+            30, artist="Maty Noyes, Beekwilder",
+            title="Lava Lamps (feat. Beekwilder)",
+        ))
+        self.assertEqual(upload.title, "Lava Lamps")
+        self.assertEqual(upload.artist, "Maty Noyes, Beekwilder")
+        self.assertEqual(song_identity("Song - Singer.wav", "Song"), ("Song", "Singer"))
+        self.assertEqual(song_identity("Song (Singer) - Live.wav", metadata_artist="Singer"),
+                         ("Song - Live", "Singer"))
+
+    def test_artist_metadata_and_unknown_artist_fallback(self) -> None:
+        tagged = inspect_audio("tagged.m4a", alac_bytes(30, artist="Tagged Artist"))
+        self.assertEqual(tagged.artist, "Tagged Artist")
+        self.assertEqual(tagged.display_artist, "Tagged Artist")
+        unknown = inspect_audio("untagged.wav", audio_bytes(30))
+        self.assertIsNone(unknown.artist)
+        self.assertEqual(unknown.display_artist, "Unknown Artist")
+
     def test_alac_upload_crops_and_saves_as_playable_wav(self) -> None:
         source = alac_bytes(31)
         upload = inspect_audio("lossless.m4a", source)
@@ -174,7 +218,18 @@ class UploadTests(unittest.TestCase):
         self.assertFalse(app.exception)
         upload = next(iter(app.session_state["audio_uploads"].values()))
         self.assertIsNotNone(upload.clip_bytes)
-        self.assertTrue(any(button.label == "Separate into six stems" for button in app.button))
+        self.assertTrue(any(button.label == "Separate into 6 stems" for button in app.button))
+
+    def test_model_selector_changes_available_separation(self) -> None:
+        app = AppTest.from_file(str(APP_PATH)).run()
+        app.get("file_uploader")[0].upload("song.wav", audio_bytes(30), "audio/wav").run()
+
+        model = next(field for field in app.selectbox if field.label == "Demucs model")
+        self.assertEqual(model.value, "htdemucs_6s")
+        model.set_value("htdemucs").run()
+
+        self.assertFalse(app.exception)
+        self.assertTrue(any(button.label == "Separate into 4 stems" for button in app.button))
 
     def test_edited_save_title_updates_library_label(self) -> None:
         app = AppTest.from_file(str(APP_PATH)).run()
@@ -187,6 +242,54 @@ class UploadTests(unittest.TestCase):
         self.assertTrue(any(button.label == "My Library Title" for button in app.button))
         upload = next(iter(app.session_state["audio_uploads"].values()))
         self.assertEqual(upload.name, "original.wav")
+
+    def test_artist_field_updates_song_and_secondary_headings(self) -> None:
+        app = AppTest.from_file(str(APP_PATH)).run()
+        app.get("file_uploader")[0].upload("original.wav", audio_bytes(30), "audio/wav").run()
+        upload = next(iter(app.session_state["audio_uploads"].values()))
+        self.assertTrue(any("<h2 class=\"artist-heading\">Unknown Artist</h2>" in item.value
+                            for item in app.get("html")))
+
+        artist = next(field for field in app.text_input if field.label == "Artist for saved audio")
+        artist.set_value("  My Artist  ").run()
+        self.assertFalse(app.exception)
+        self.assertEqual(upload.artist, "My Artist")
+        html = [item.value for item in app.get("html")]
+        self.assertTrue(any("library-artist\">My Artist</h3>" in item for item in html))
+        self.assertTrue(any("<h2 class=\"artist-heading\">My Artist</h2>" in item
+                            for item in html))
+
+        next(field for field in app.text_input
+             if field.label == "Artist for saved audio").set_value(" ").run()
+        self.assertIsNone(upload.artist)
+        self.assertTrue(any("Unknown Artist" in item.value for item in app.get("html")))
+
+    def test_filename_artist_populates_save_fields_and_display(self) -> None:
+        app = AppTest.from_file(str(APP_PATH)).run()
+        app.get("file_uploader")[0].upload(
+            "Boy Afraid (Saro).wav", audio_bytes(30), "audio/wav").run()
+        upload = next(iter(app.session_state["audio_uploads"].values()))
+        self.assertEqual(upload.title, "Boy Afraid")
+        self.assertEqual(upload.artist, "Saro")
+        self.assertTrue(any(button.label == "Boy Afraid" for button in app.button))
+        self.assertEqual(next(field.value for field in app.text_input
+                              if field.label == "Title for saved audio"), "Boy Afraid")
+        self.assertEqual(next(field.value for field in app.text_input
+                              if field.label == "Artist for saved audio"), "Saro")
+
+    def test_edited_title_removes_artist_credit(self) -> None:
+        app = AppTest.from_file(str(APP_PATH)).run()
+        app.get("file_uploader")[0].upload("song.wav", audio_bytes(30), "audio/wav").run()
+        next(field for field in app.text_input
+             if field.label == "Title for saved audio").set_value("Song (Singer)").run()
+
+        upload = next(iter(app.session_state["audio_uploads"].values()))
+        self.assertEqual(upload.title, "Song")
+        self.assertEqual(upload.artist, "Singer")
+        self.assertEqual(next(field.value for field in app.text_input
+                              if field.label == "Title for saved audio"), "Song")
+        self.assertEqual(next(field.value for field in app.text_input
+                              if field.label == "Artist for saved audio"), "Singer")
 
 
 if __name__ == "__main__":
