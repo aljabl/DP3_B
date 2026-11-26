@@ -1,5 +1,6 @@
-streamlit>=1.54,<2
+streamlit>=1.67,<2
 soundfile>=0.13,<1
+av>=14,<18
 demucs>=4,<5
 librosa>=0.11,<2
 numpy>=2,<3

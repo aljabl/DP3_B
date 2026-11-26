@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from io import BytesIO
+import json
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,8 @@ import soundfile as sf
 
 from .features import FeatureExtractor, to_analysis
 from .stem_service import DATA_ROOT
-from .upload import CLIP_SECONDS, CLIP_TOLERANCE_SECONDS, UploadedAudio, source_matches_file
+from .upload import (CLIP_SECONDS, CLIP_TOLERANCE_SECONDS, UploadedAudio,
+                     bytes_match_file, source_matches_file)
 from .facets import FacetPolicy
 from . import config
 from .rhythm import RHYTHM_BLOCKS
@@ -59,7 +61,8 @@ class SimilarityIndex:
     """The saved raw embeddings and their playable audio files."""
 
     def __init__(self, rows: pd.DataFrame, vectors: dict[str, np.ndarray], data_root: Path,
-                 policy: FacetPolicy | None = None):
+                 policy: FacetPolicy | None = None,
+                 user_source_paths: dict[str, Path] | None = None):
         self.rows = rows
         self.vectors = vectors
         self.data_root = data_root
@@ -68,6 +71,8 @@ class SimilarityIndex:
         for dataset in ("previews", "harmonix"):
             for path in (data_root / "audio" / dataset).glob("*.wav"):
                 self.source_paths[(dataset, path.stem.replace(" ", ""))] = path
+        for track_id, path in (user_source_paths or {}).items():
+            self.source_paths[("user_added", track_id)] = path
 
     @classmethod
     def load(cls, data_root: Path = DATA_ROOT) -> "SimilarityIndex":
@@ -82,7 +87,54 @@ class SimilarityIndex:
         except (FileNotFoundError, KeyError) as exc:
             raise SearchError("The stem search index is missing. Run the table build stage first.") from exc
 
-        return cls(rows, vectors, data_root, policy)
+        user_paths = {}
+        additions = []
+        user_index_dir = index_dir / "user_added"
+        indexed_ids = set(rows.loc[rows["dataset"] == "user_added", "track_id"].astype(str))
+        for folder in sorted(user_index_dir.iterdir()) if user_index_dir.is_dir() else ():
+            if not folder.is_dir() or folder.name in indexed_ids:
+                continue
+            try:
+                meta = json.loads((folder / "meta.json").read_text())
+                filename = meta["song_filename"]
+                if Path(filename).name != filename:
+                    continue
+                song_path = data_root / "user_added" / filename
+                if not song_path.is_file():
+                    continue
+                with np.load(folder / "vectors.npz", allow_pickle=False) as saved:
+                    extra = {facet: saved[facet] for facet in policy.indexed_facets()}
+                count = len(next(iter(extra.values())))
+                if any(array.ndim != 2 or len(array) != count or
+                       array.shape[1] != vectors[facet].shape[1]
+                       for facet, array in extra.items()):
+                    continue
+                offset = len(next(iter(vectors.values())))
+                entry_rows = []
+                for item in meta["rows"]:
+                    local_row = int(item["row"])
+                    if local_row < -1 or local_row >= count:
+                        raise ValueError("Invalid row in saved upload index")
+                    entry_rows.append({
+                        "dataset": "user_added", "track_id": folder.name,
+                        "stem": item["stem"], "status": item["status"],
+                        "rms_db": item["rms_db"],
+                        "row": offset + local_row if local_row >= 0 else -1,
+                        "meter_beats": meta.get("meter_beats"),
+                        "meter_confidence": meta.get("meter_confidence", 0.0),
+                    })
+                if not all((data_root / "stems" / "user_added" / folder.name /
+                            f"{item['stem']}.flac").is_file() for item in meta["rows"]):
+                    continue
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            additions.extend(entry_rows)
+            for facet in policy.indexed_facets():
+                vectors[facet] = np.concatenate((vectors[facet], extra[facet]))
+            user_paths[folder.name] = song_path
+        if additions:
+            rows = pd.concat((rows, pd.DataFrame(additions)), ignore_index=True)
+        return cls(rows, vectors, data_root, policy, user_paths)
 
     def _mix_path(self, dataset: str, track_id: str) -> Path | None:
         if dataset == "fma":
@@ -184,9 +236,15 @@ class SimilarityIndex:
                 continue
             if (
                 upload is not None
-                and upload.clip_start_seconds == 0
-                and abs(upload.duration_seconds - CLIP_SECONDS) <= CLIP_TOLERANCE_SECONDS
-                and source_matches_file(mix_path, upload)
+                and ((
+                    upload.clip_start_seconds == 0
+                    and abs(upload.duration_seconds - CLIP_SECONDS) <= CLIP_TOLERANCE_SECONDS
+                    and source_matches_file(mix_path, upload)
+                ) or (
+                    dataset == "user_added"
+                    and upload.clip_bytes is not None
+                    and bytes_match_file(mix_path, upload.clip_bytes)
+                ))
             ):
                 continue
             results.append(SearchResult(dataset, track_id, matched_stem,

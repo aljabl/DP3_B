@@ -2,6 +2,7 @@
 
 from hashlib import sha256
 from io import BytesIO
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -74,6 +75,20 @@ def _existing_dataset_stems(upload: UploadedAudio, data_root: Path) -> dict[str,
 
     for source, folder in candidates:
         if source_matches_file(source, upload):
+            cached = _read_disk_stems(folder, upload.duration_seconds)
+            if cached is not None:
+                return cached
+    user_index = data_root / "index" / "user_added"
+    for metadata in user_index.glob("*/meta.json"):
+        try:
+            filename = json.loads(metadata.read_text())["song_filename"]
+            if Path(filename).name != filename:
+                continue
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        source = data_root / "user_added" / filename
+        if source_matches_file(source, upload):
+            folder = data_root / "stems" / "user_added" / metadata.parent.name
             cached = _read_disk_stems(folder, upload.duration_seconds)
             if cached is not None:
                 return cached
