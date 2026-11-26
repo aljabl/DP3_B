@@ -9,12 +9,25 @@
 Install the interface dependency with `py -m pip install -r requirements-app.txt`,
 then start the app from this directory with `py stem_similarity_search.py`.
 On macOS or Linux, use `python3` in place of `py`.
-The interface keeps uploaded WAV/MP3 files and their 30-second clips in session
-memory. Files within 0.1 seconds of 30 seconds are accepted as complete;
+The interface keeps uploaded WAV, MP3, and ALAC files (`.m4a`, `.mp4`, or
+`.caf`) and their 30-second clips in session memory. Files within 0.1 seconds
+of 30 seconds are accepted as complete;
 shorter files cannot be cropped, and longer files require you to choose and
-save a 30-second crop.
+save a 30-second crop. For longer songs, drag the fixed 30-second window across
+the full waveform to choose the segment, then save that crop. The player previews
+the selected segment before you separate or save the song.
+Edit **Title for saved audio** to rename the song in the library. To keep it on
+disk, choose **Save song to disk**.
+The app writes it to `data/user_added/`; longer uploads are saved as only the
+selected 30-second WAV crop. ALAC clips are also saved as WAV for playback and
+search results. Saving stores all six stems under
+`data/stems/user_added/` and adds their descriptors to the persistent search
+index under `data/index/user_added/`, so the clip can appear in later searches.
+If separation or feature extraction fails, the save is cancelled. Existing
+filenames are never overwritten.
 For audio separation, the app checks its session memory and matching stems in
-`data/stems/` before running Demucs. New stem results stay in session memory.
+`data/stems/` before running Demucs. New stem results stay in session memory
+until the song is saved to disk.
 After separation, select a stem and search the saved embeddings. The app shows
 the three closest playable songs, using the beat-synchronous chroma and MFCC
 descriptors in `dp3/features.py`.

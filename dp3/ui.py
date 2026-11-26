@@ -20,12 +20,26 @@ STYLE = """
   .st-key-library_panel, .st-key-song_panel, .st-key-results_panel { min-height: 100vh; }
   .st-key-library_panel, .st-key-song_panel { padding: 1.5rem; }
   .st-key-results_panel { padding: 1.5rem 2rem; position: relative; }
-  .st-key-library_panel { background: #1b131d; border-right: 1px solid #483047; }
+  .st-key-library_panel {
+    background: #1b131d; border-right: 1px solid #483047;
+    min-height: calc(100dvh - 1rem);
+  }
   .st-key-song_panel { background: #1a121c; border-right: 1px solid #483047; }
   .st-key-results_panel { background: #160f18; }
   .eyebrow { color: #c6b3c5; font-size: .95rem; font-weight: 800; letter-spacing: .12em; }
   .panel-title { color: #f6edf4; font-size: 1.65rem; font-weight: 750; line-height: 1.15; margin: .2rem 0 .45rem; }
   .st-key-song_panel .panel-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stem-resize-handle {
+    position: fixed; z-index: 100; width: 12px;
+    cursor: col-resize; touch-action: none;
+  }
+  .stem-resize-handle::after {
+    content: ""; position: absolute; left: 5px; top: 0; bottom: 0;
+    width: 2px; background: #654665;
+  }
+  .stem-resize-handle:hover::after, .stem-resize-handle:focus-visible::after,
+  .stem-resize-handle.is-dragging::after { background: #f461af; }
+  .stem-resize-handle:focus-visible { outline: 2px solid #ff9dce; outline-offset: 2px; }
   .map-note { color: #c9b6c8; font-size: .95rem; position: absolute; right: 2rem; top: 1.5rem; }
   .map-placeholder {
     border: 1.5px dashed #4d334d;
@@ -62,6 +76,17 @@ STYLE = """
   .st-key-mix_player {
     background: #251827; border-radius: 1rem;
     padding: .5rem 1rem; margin-bottom: .7rem;
+  }
+  .st-key-save_song_action {
+    background: #251827; border: 1px solid #5b3d5a;
+    border-radius: .85rem; padding: .75rem; margin: .8rem 0;
+  }
+  .st-key-save_song_action [data-testid="stButton"] button {
+    background: #43233e; border: 1px solid #654665;
+    color: #f6edf4; font-weight: 750;
+  }
+  .st-key-save_song_action [data-testid="stButton"] button:hover {
+    background: #543049; border-color: #f461af; color: #f6edf4;
   }
   .wave-player {
     display: flex; align-items: center; gap: .75rem;
@@ -123,9 +148,16 @@ STYLE = """
   .st-key-stem_row_bass button, .st-key-stem_row_guitar button,
   .st-key-stem_row_piano button, .st-key-stem_row_other button,
   .st-key-selected_stem_row button { min-height: 2rem; padding: .15rem .2rem; font-size: .82rem; }
-  .library-spacer { height: max(1rem, calc(100vh - 20rem)); }
+  .st-key-library_panel > [data-testid="stLayoutWrapper"]:has(.st-key-library_song_list) {
+    flex: 1 1 0; min-height: 0; overflow-y: auto;
+    overscroll-behavior: contain; scrollbar-width: thin;
+  }
+  .st-key-library_panel > [data-testid="stLayoutWrapper"]:has(.st-key-library_drop) {
+    flex: 0 0 auto;
+  }
   .st-key-library_drop {
     border: 1.5px dashed #5b3b59; border-radius: 1rem; padding: .85rem;
+    max-height: 40vh; overflow-y: auto;
   }
   .st-key-library_drop [data-testid="stFileUploaderDropzone"] {
     background: transparent; border: 0; padding: .25rem;
@@ -136,6 +168,14 @@ STYLE = """
   }
   .st-key-library_drop [data-testid="stFileUploaderDropzone"] button:hover {
     background: #ff7dbd; color: #1a1119;
+  }
+  .st-key-library_drop button[aria-label^="Remove "] {
+    flex: 0 0 1.25rem; width: 1.25rem; height: 1.25rem; min-height: 0;
+    padding: 0; border: 0; border-radius: 50%; background: transparent;
+    color: #c6b3c5; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .st-key-library_drop button[aria-label^="Remove "]:hover {
+    background: #43233e; color: #f6edf4;
   }
   .st-key-library_drop [data-testid="stFileUploaderDropzoneInstructions"] { display: none; }
   .upload-hint {
@@ -153,23 +193,58 @@ STYLE = """
   }
   .selected-label { color: #c6b3c5; font-size: .9rem; }
   .selected-name { color: #f6edf4; font-weight: 800; font-size: 1.2rem; }
-  .st-key-search_action button {
+  .st-key-search_action [data-testid="stCheckbox"] label {
+    align-items: center !important;
+  }
+  .st-key-search_action button[aria-label="Help for Search all stem types"] {
+    flex: 0 0 1.25rem; width: 1.25rem; height: 1.25rem; min-height: 0;
+    padding: 0; border: 0; border-radius: 50%; background: transparent;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .st-key-search_action [data-testid="stButton"] button {
     background: #f461af; color: #1a1119; border: 0; border-radius: .75rem;
     font-weight: 800; min-height: 3.1rem;
   }
-  .st-key-search_action button:hover { background: #ff7dbd; color: #1a1119; }
+  .st-key-search_action [data-testid="stButton"] button:hover {
+    background: #ff7dbd; color: #1a1119;
+  }
   .st-key-result_card_1, .st-key-result_card_2, .st-key-result_card_3 {
     background: #251827; border: 1px solid #4d334d; border-radius: 1rem;
     padding: 1rem 1.25rem; margin-bottom: 1rem;
+  }
+  @media (min-width: 1001px) {
+    [data-testid="stMain"] { overflow: hidden; }
+    [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] { gap: 0; }
+    [data-testid="stHorizontalBlock"]:has(.st-key-library_panel) {
+      height: 100vh; overflow: hidden;
+    }
+    [data-testid="stHorizontalBlock"]:has(.st-key-library_panel) > [data-testid="stColumn"] {
+      height: 100vh; min-height: 0; overflow: hidden;
+    }
+    .st-key-library_panel, .st-key-song_panel, .st-key-results_panel {
+      min-height: 100vh !important; max-height: 100vh !important;
+      overflow-y: auto;
+    }
+    .st-key-library_panel { overflow: hidden; }
+    .map-placeholder { min-height: calc(100vh - 10rem); }
   }
   @media (max-width: 1000px) {
     [data-testid="stHorizontalBlock"]:has(.st-key-library_panel) { flex-direction: column !important; }
     [data-testid="stHorizontalBlock"]:has(.st-key-library_panel) > [data-testid="stColumn"] {
       width: 100% !important; flex: 1 1 100% !important; min-width: 0 !important;
     }
-    .st-key-library_panel, .st-key-song_panel, .st-key-results_panel { min-height: auto; padding: 1.4rem; }
-    .library-spacer { height: 1rem !important; }
+    .st-key-library_panel, .st-key-song_panel, .st-key-results_panel {
+      min-height: auto; padding: 1.4rem;
+    }
+    .st-key-library_panel {
+      min-height: 100dvh !important; max-height: 100dvh !important;
+      overflow: hidden;
+    }
     .map-placeholder { min-height: 28rem; }
+    .stem-resize-handle { height: 12px; cursor: row-resize; }
+    .stem-resize-handle::after {
+      left: 0; right: 0; top: 5px; bottom: auto; width: auto; height: 2px;
+    }
   }
 </style>
 """
@@ -184,8 +259,189 @@ EMPTY_MAP = """
 """
 
 
+STEM_PANE_RESIZER = """
+<script>
+(() => {
+  window.__stemPaneResizer?.destroy();
+  const panel = document.querySelector('.st-key-song_panel');
+  const song = panel?.closest('[data-testid="stColumn"]');
+  const row = song?.parentElement;
+  if (!row || row.getAttribute('data-testid') !== 'stHorizontalBlock') return;
+  const columns = Array.from(row.children).filter(
+    element => element.getAttribute('data-testid') === 'stColumn'
+  );
+  const index = columns.indexOf(song);
+  const library = columns[0];
+  const results = columns[index + 1];
+  if (!results) return;
+
+  const widthKey = 'stem-pane-width';
+  const heightKey = 'stem-pane-height';
+  if (__OPEN_PANE__) sessionStorage.removeItem(widthKey);
+  const snapWidth = 280;
+  const libraryFraction = 1.05 / 5.35;
+  const songFraction = 1.3 / 5.35;
+  const storedWidth = sessionStorage.getItem(widthKey);
+  const savedWidth = Number(storedWidth);
+  let width = storedWidth !== null && Number.isFinite(savedWidth) && savedWidth >= 0
+    ? savedWidth : null;
+  const storedHeight = sessionStorage.getItem(heightKey);
+  const savedHeight = Number(storedHeight);
+  let height = storedHeight !== null && Number.isFinite(savedHeight) && savedHeight >= 0
+    ? savedHeight : null;
+  const mobile = window.matchMedia('(max-width: 1000px)');
+  const handle = document.createElement('div');
+  handle.className = 'stem-resize-handle';
+  handle.tabIndex = 0;
+  handle.setAttribute('role', 'separator');
+  handle.setAttribute('aria-label', 'Resize stem panel');
+  handle.setAttribute('aria-orientation', mobile.matches ? 'horizontal' : 'vertical');
+  handle.setAttribute('aria-valuemin', '0');
+  handle.title = 'Drag to resize or hide the stem panel';
+  document.body.appendChild(handle);
+
+  const boundedWidth = value => Math.max(0, Math.min(
+    value, row.getBoundingClientRect().width - library.getBoundingClientRect().width - 200
+  ));
+  const defaultWidth = () => boundedWidth(Math.max(
+    snapWidth + 1, row.getBoundingClientRect().width * songFraction
+  ));
+  function position() {
+    const bounds = song.getBoundingClientRect();
+    if (mobile.matches) {
+      handle.style.position = 'fixed';
+      handle.style.left = `${bounds.left}px`;
+      handle.style.top = `${bounds.bottom - 6}px`;
+      handle.style.width = `${bounds.width}px`;
+      handle.style.bottom = 'auto';
+      handle.style.height = '12px';
+    } else {
+      handle.style.position = 'fixed';
+      handle.style.left = `${bounds.right - 6}px`;
+      handle.style.top = `${Math.max(0, bounds.top)}px`;
+      handle.style.width = '12px';
+      handle.style.bottom = '0';
+      handle.style.height = 'auto';
+    }
+  }
+  function render() {
+    handle.setAttribute('aria-orientation', mobile.matches ? 'horizontal' : 'vertical');
+    if (mobile.matches) {
+      library.style.removeProperty('width');
+      library.style.removeProperty('flex');
+      song.style.removeProperty('width');
+      song.style.removeProperty('flex');
+      results.style.removeProperty('width');
+      results.style.removeProperty('flex');
+      song.style.setProperty('max-height', height === null ? 'none' : `${height}px`);
+      song.style.setProperty('overflow', height === null ? 'visible' : 'auto');
+      handle.setAttribute('aria-valuemax', String(Math.round(song.scrollHeight)));
+      handle.setAttribute('aria-valuenow', String(Math.round(height ?? song.scrollHeight)));
+    } else {
+      const libraryPercent = `${libraryFraction * 100}%`;
+      library.style.setProperty('flex', `0 0 ${libraryPercent}`, 'important');
+      library.style.setProperty('width', libraryPercent, 'important');
+      song.style.removeProperty('max-height');
+      song.style.setProperty('overflow', 'hidden');
+      if (width === null) width = defaultWidth();
+      width = boundedWidth(width);
+      song.style.setProperty('flex', `0 0 ${width}px`, 'important');
+      song.style.setProperty('width', `${width}px`, 'important');
+      song.style.setProperty('min-width', '0', 'important');
+      results.style.setProperty('flex', '1 1 0', 'important');
+      results.style.setProperty('width', 'auto', 'important');
+      results.style.setProperty('min-width', '0', 'important');
+      handle.setAttribute('aria-valuemax', String(Math.round(boundedWidth(Infinity))));
+      handle.setAttribute('aria-valuenow', String(Math.round(width)));
+    }
+    position();
+  }
+
+  let dragging = false;
+  let startedClosed = false;
+  function onMove(event) {
+    if (!dragging) return;
+    event.preventDefault();
+    if (mobile.matches) {
+      height = Math.max(0, event.clientY - song.getBoundingClientRect().top);
+    } else {
+      width = boundedWidth(event.clientX - song.getBoundingClientRect().left);
+    }
+    render();
+  }
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('is-dragging');
+    if (mobile.matches) {
+      if (height < 40) height = 0;
+      sessionStorage.setItem(heightKey, String(height));
+    } else {
+      if (startedClosed && width > 0) width = Math.max(width, defaultWidth());
+      else if (width <= snapWidth) width = 0;
+      sessionStorage.setItem(widthKey, String(width));
+    }
+    render();
+  }
+  function onDown(event) {
+    event.preventDefault();
+    startedClosed = !mobile.matches && width === 0;
+    dragging = true;
+    handle.classList.add('is-dragging');
+  }
+  function onKey(event) {
+    const step = event.shiftKey ? 100 : 25;
+    if (event.key === 'Home') {
+      mobile.matches ? height = 0 : width = 0;
+    } else if (event.key === 'End') {
+      mobile.matches ? height = song.scrollHeight : width = boundedWidth(Infinity);
+    } else if (mobile.matches && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      height = Math.max(0, (height ?? song.scrollHeight) + (event.key === 'ArrowDown' ? step : -step));
+    } else if (!mobile.matches && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      width = event.key === 'ArrowRight' && width === 0
+        ? boundedWidth(Math.max(defaultWidth(), snapWidth + step))
+        : boundedWidth(width + (event.key === 'ArrowRight' ? step : -step));
+      if (width <= snapWidth) width = 0;
+    } else return;
+    event.preventDefault();
+    if (mobile.matches) sessionStorage.setItem(heightKey, String(height));
+    else sessionStorage.setItem(widthKey, String(width));
+    render();
+  }
+  handle.addEventListener('pointerdown', onDown);
+  handle.addEventListener('keydown', onKey);
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onUp);
+  window.addEventListener('resize', render);
+  window.addEventListener('scroll', position, true);
+  mobile.addEventListener('change', render);
+  render();
+  window.__stemPaneResizer = {
+    destroy() {
+      handle.remove();
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('resize', render);
+      window.removeEventListener('scroll', position, true);
+      mobile.removeEventListener('change', render);
+    }
+  };
+})();
+</script>
+"""
+
+
 def apply_style() -> None:
     st.html(STYLE)
+    st.html('<script>window.__stemPaneResizer?.destroy();</script>', unsafe_allow_javascript=True)
+
+
+def install_stem_pane_resizer(*, open_pane: bool = False) -> None:
+    """Let the user resize or collapse the stem pane from its outer edge."""
+    script = STEM_PANE_RESIZER.replace("__OPEN_PANE__", "true" if open_pane else "false")
+    st.html(script, unsafe_allow_javascript=True)
 
 
 def _waveform_heights(data: bytes, bars: int) -> tuple[np.ndarray, float]:

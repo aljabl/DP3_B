@@ -6,9 +6,11 @@ from pathlib import Path
 
 import streamlit as st
 
+from dp3.crop_window import crop_window, format_crop_time, waveform_peaks
+from dp3.save_audio import save_and_index_upload
 from dp3.search import SimilarityIndex, SearchResult, query_descriptors
 from dp3.stem_service import DATA_ROOT, load_or_separate, stem_cache_key
-from dp3.ui import EMPTY_MAP, apply_style, waveform_player_html
+from dp3.ui import EMPTY_MAP, apply_style, install_stem_pane_resizer, waveform_player_html
 from dp3.upload import (
     CLIP_SECONDS,
     CLIP_TOLERANCE_SECONDS,
@@ -16,6 +18,7 @@ from dp3.upload import (
     UploadedAudio,
     crop_audio,
     inspect_audio,
+    source_audio_for_playback,
     whole_clip_audio,
 )
 
@@ -32,16 +35,17 @@ def get_separator():
 
 
 @st.cache_resource
-def _load_similarity_index(index_version: tuple[int, int]) -> SimilarityIndex:
+def _load_similarity_index(index_version: tuple[int, ...]) -> SimilarityIndex:
     return SimilarityIndex.load()
 
 
 def get_similarity_index() -> SimilarityIndex:
-    """Reload the cached search index when the table build replaces its files."""
+    """Reload when the table or saved uploads change."""
     folder = DATA_ROOT / "index"
     version = tuple((folder / name).stat().st_mtime_ns if (folder / name).exists() else 0
                     for name in ("embeddings.npz", "embeddings_index.csv"))
-    return _load_similarity_index(version)
+    user_index = folder / "user_added"
+    return _load_similarity_index((*version, user_index.stat().st_mtime_ns if user_index.exists() else 0))
 
 
 def add_uploads(uploads: dict[str, UploadedAudio], files: list) -> list[str]:
@@ -67,10 +71,17 @@ def add_uploads(uploads: dict[str, UploadedAudio], files: list) -> list[str]:
 
 def _select_audio(audio_id: str) -> None:
     st.session_state["selected_audio_id"] = audio_id
+    st.session_state["open_stem_pane"] = True
 
 
 def _select_stem(clip_key: str, stem: str) -> None:
     st.session_state[f"selected_stem_{clip_key}"] = stem
+
+
+def display_title(upload: UploadedAudio, audio_id: str) -> str:
+    """Use the edited save title throughout the current session."""
+    edited = st.session_state.get(f"save_title_{audio_id}", "").strip()
+    return edited or Path(upload.name).stem
 
 
 def _library_audio(upload: UploadedAudio, audio_id: str) -> tuple[bytes, str]:
@@ -82,7 +93,7 @@ def _library_audio(upload: UploadedAudio, audio_id: str) -> tuple[bytes, str]:
         if audio_id not in previews:
             previews[audio_id] = crop_audio(upload, 0.0)
         return previews[audio_id], "audio/wav"
-    return upload.source_bytes, upload.mime_type
+    return source_audio_for_playback(upload)
 
 
 def show_library(uploads: dict[str, UploadedAudio], selected_id: str | None) -> None:
@@ -101,97 +112,102 @@ def show_library(uploads: dict[str, UploadedAudio], selected_id: str | None) -> 
         visible = [
             (audio_id, upload)
             for audio_id, upload in uploads.items()
-            if filter_text in upload.name.casefold()
+            if filter_text in display_title(upload, audio_id).casefold()
         ]
-        if not uploads:
-            st.caption("Your uploaded songs will appear here.")
-        elif not visible:
-            st.caption("No songs match this filter.")
+        with st.container(key="library_song_list"):
+            if not uploads:
+                st.caption("Your uploaded songs will appear here.")
+            elif not visible:
+                st.caption("No songs match this filter.")
 
-        for audio_id, upload in visible:
-            row_key = "selected_song_row" if audio_id == selected_id else f"song_row_{audio_id}"
-            with st.container(key=row_key, gap="xxsmall"):
-                choose, duration = st.columns([3, 1], gap="small", vertical_alignment="center")
-                with choose:
-                    st.button(
-                        Path(upload.name).stem,
-                        key=f"choose_audio_{audio_id}",
-                        on_click=_select_audio,
-                        args=(audio_id,),
-                        use_container_width=True,
-                        type="tertiary",
-                    )
-                with duration:
-                    minutes, seconds = divmod(round(upload.duration_seconds), 60)
-                    st.caption(f"{minutes}:{seconds:02d}")
-                try:
-                    audio, audio_format = _library_audio(upload, audio_id)
-                except AudioUploadError as exc:
-                    st.caption(f"Preview unavailable: {exc}")
-                else:
-                    st.html(
-                        waveform_player_html(
-                            audio,
-                            key=f"library_{audio_id}",
-                            label=f"{Path(upload.name).stem} in library",
-                            mime_type=audio_format,
-                            bars=28,
-                            compact=True,
-                        ),
-                        unsafe_allow_javascript=True,
-                    )
+            for audio_id, upload in visible:
+                row_key = "selected_song_row" if audio_id == selected_id else f"song_row_{audio_id}"
+                with st.container(key=row_key, gap="xxsmall"):
+                    choose, duration = st.columns([3, 1], gap="small", vertical_alignment="center")
+                    with choose:
+                        st.button(
+                            display_title(upload, audio_id),
+                            key=f"choose_audio_{audio_id}",
+                            on_click=_select_audio,
+                            args=(audio_id,),
+                            use_container_width=True,
+                            type="tertiary",
+                        )
+                    with duration:
+                        minutes, seconds = divmod(round(upload.duration_seconds), 60)
+                        st.caption(f"{minutes}:{seconds:02d}")
+                    try:
+                        audio, audio_format = _library_audio(upload, audio_id)
+                    except AudioUploadError as exc:
+                        st.caption(f"Preview unavailable: {exc}")
+                    else:
+                        st.html(
+                            waveform_player_html(
+                                audio,
+                                key=f"library_{audio_id}",
+                                label=f"{display_title(upload, audio_id)} in library",
+                                mime_type=audio_format,
+                                bars=28,
+                                compact=True,
+                            ),
+                            unsafe_allow_javascript=True,
+                        )
 
-        spacer_rem = 23.5 + 7 * len(visible)
-        st.html(
-            f'<div class="library-spacer" style="height:max(1rem, calc(100vh - {spacer_rem:.2f}rem))"></div>'
-        )
         with st.container(key="library_drop"):
             drop_files = st.file_uploader(
-                "Upload MP3 or WAV audio",
-                type=["wav", "mp3"],
+                "Upload WAV, MP3, or ALAC audio",
+                type=["wav", "mp3", "m4a", "mp4", "caf"],
                 accept_multiple_files=True,
                 key="upload_drop_zone",
                 label_visibility="collapsed",
-                help="Choose files or drag and drop them here. Longer audio can be cropped to 30 seconds.",
+                help="Choose or drop WAV, MP3, or ALAC files. Longer audio can be cropped to 30 seconds.",
             )
-            st.html('<div class="upload-hint">or drop a clip here<br>MP3 or WAV, up to 30 s</div>')
+            st.html('<div class="upload-hint">or drop a clip here<br>WAV, MP3, or ALAC</div>')
 
         added = add_uploads(uploads, drop_files)
         if added:
             st.session_state["selected_audio_id"] = added[-1]
+            st.session_state["open_stem_pane"] = True
             st.rerun()
 
 
-def show_song_audio(upload: UploadedAudio, audio_id: str) -> None:
-    """Render playback and any required 30-second crop controls."""
-    title = escape(Path(upload.name).stem)
+def show_song_audio(upload: UploadedAudio, audio_id: str) -> bool:
+    """Render playback and return whether the selected crop is saved."""
+    title = escape(display_title(upload, audio_id))
     st.html(f'<div class="eyebrow">SONG</div><h1 class="panel-title">{title}</h1>')
 
     crop_preview = None
+    selected_crop_saved = upload.clip_bytes is not None
     if upload.duration_seconds > CLIP_SECONDS + CLIP_TOLERANCE_SECONDS:
-        max_start = (upload.frames - CLIP_SECONDS * upload.sample_rate) / upload.sample_rate
-        start = st.slider(
-            "Crop start (seconds)",
-            min_value=0.0,
-            max_value=max_start,
-            value=0.0,
-            step=0.1,
-            key=f"crop_start_{audio_id}",
-        )
         try:
+            waveforms = st.session_state.setdefault("crop_waveforms", {})
+            if audio_id not in waveforms:
+                waveforms[audio_id] = waveform_peaks(upload)
+            start = crop_window(upload, audio_id, waveforms[audio_id])
             crop_preview = crop_audio(upload, start)
         except AudioUploadError as exc:
             st.error(str(exc))
-            return
+            return False
+        selected_crop_saved = (
+            upload.clip_bytes is not None
+            and upload.clip_start_seconds is not None
+            and abs(start - upload.clip_start_seconds) < 0.05
+        )
 
     with st.container(key="mix_player"):
-        audio = upload.clip_bytes or crop_preview or upload.source_bytes
-        audio_format = "audio/wav" if upload.clip_bytes or crop_preview else upload.mime_type
+        try:
+            if crop_preview or upload.clip_bytes:
+                audio, audio_format = crop_preview or upload.clip_bytes, "audio/wav"
+            else:
+                audio, audio_format = source_audio_for_playback(upload)
+        except AudioUploadError as exc:
+            st.error(f"Could not play this song: {exc}")
+            return False
         st.html(
             waveform_player_html(
                 audio,
                 key=f"mix_{audio_id}",
-                label=Path(upload.name).stem,
+                label=display_title(upload, audio_id),
                 mime_type=audio_format,
                 bars=42,
             ),
@@ -200,24 +216,48 @@ def show_song_audio(upload: UploadedAudio, audio_id: str) -> None:
 
     if upload.duration_seconds < CLIP_SECONDS - CLIP_TOLERANCE_SECONDS:
         st.warning("This song is shorter than 30 seconds. Upload a longer file.")
-        return
+        return False
 
     if crop_preview is not None:
-        st.caption(f"30-second crop · {start:.1f}–{start + CLIP_SECONDS:.1f} s")
-        if upload.clip_bytes is not None:
-            st.html(
-                waveform_player_html(
-                    crop_preview,
-                    key=f"crop_preview_{audio_id}_{start}",
-                    label="Crop preview",
-                    bars=42,
-                ),
-                unsafe_allow_javascript=True,
-            )
-        if st.button("Save this 30-second crop", key=f"save_crop_{audio_id}"):
+        st.caption(
+            f"30-second crop · {format_crop_time(start)}–{format_crop_time(start + CLIP_SECONDS)}"
+        )
+        if st.button("Save this 30-second crop", key=f"save_crop_{audio_id}",
+                     disabled=selected_crop_saved):
             upload.clip_bytes = crop_preview
             upload.clip_start_seconds = start
             st.rerun()
+
+    with st.container(key="save_song_action"):
+        title_to_save = st.text_input(
+            "Title for saved audio",
+            value=Path(upload.name).stem,
+            key=f"save_title_{audio_id}",
+            help="The title becomes the filename in data/user_added.",
+            persist_state="session",
+        )
+        if st.button(
+            "Save song to disk",
+            key=f"save_song_{audio_id}",
+            disabled=not selected_crop_saved,
+            help="Save the selected 30-second crop first." if not selected_crop_saved else None,
+            width="stretch",
+        ):
+            with st.spinner("Saving the song, separating six stems, and indexing them..."):
+                try:
+                    stem_results = st.session_state.setdefault("stem_results", {})
+                    saved_path = save_and_index_upload(
+                        upload, title_to_save, stem_results, get_separator
+                    )
+                except FileExistsError:
+                    st.warning("A song with that title already exists in data/user_added. Choose another title.")
+                except Exception as exc:
+                    st.error(f"Could not save and index this song: {exc}")
+                else:
+                    if upload.duration_seconds > CLIP_SECONDS and saved_path.suffix == ".wav":
+                        upload.clip_bytes = saved_path.read_bytes()
+                    st.success(f"Saved {saved_path.name}, its six stems, and its search entry.")
+    return selected_crop_saved
 
 
 def show_stems(stems: dict[str, bytes], clip_key: str) -> str | None:
@@ -258,8 +298,7 @@ def show_stems(stems: dict[str, bytes], clip_key: str) -> str | None:
 
 def show_song_panel(upload: UploadedAudio, audio_id: str) -> tuple[str | None, list[SearchResult] | None]:
     with st.container(key="song_panel", gap="xxsmall"):
-        show_song_audio(upload, audio_id)
-        if upload.clip_bytes is None:
+        if not show_song_audio(upload, audio_id):
             return None, None
 
         clip_key = stem_cache_key(upload)
@@ -269,13 +308,14 @@ def show_song_panel(upload: UploadedAudio, audio_id: str) -> tuple[str | None, l
             if st.button("Separate into six stems", key=f"separate_{audio_id}", use_container_width=True):
                 with st.spinner("Checking cached stems and running Demucs if needed..."):
                     try:
-                        stems, _source = load_or_separate(upload, stem_results, get_separator)
+                        load_or_separate(upload, stem_results, get_separator)
                     except Exception as exc:
                         st.error(f"Could not separate this clip: {exc}")
-            if stems is None:
-                return None, None
-        else:
-            st.html('<div class="separated-status">Separated ✓</div>')
+                    else:
+                        st.rerun()
+            return None, None
+
+        st.html('<div class="separated-status">Separated ✓</div>')
 
         selected_stem = show_stems(stems, clip_key)
         if selected_stem is None:
@@ -283,19 +323,21 @@ def show_song_panel(upload: UploadedAudio, audio_id: str) -> tuple[str | None, l
         searches: dict[tuple[str, str, bool], list[SearchResult]] = st.session_state.setdefault(
             "search_results", {}
         )
-        with st.container(key="search_action"):
-            all_stems = st.checkbox(
-                "Search all stem types",
-                key=f"search_all_stems_{clip_key}",
-                help="Include vocals, drums, bass, guitar, piano, and other stems in the results.",
+        with st.container(key="search_action", gap="small"):
+            st.html(
+                '<div class="selected-label">Selected stem</div>'
+                f'<div class="selected-name">{selected_stem.capitalize()}</div>'
             )
-            search_key = (clip_key, selected_stem, all_stems)
-            label, action = st.columns([0.48, 0.52], gap="small", vertical_alignment="center")
-            with label:
-                st.html(
-                    '<div class="selected-label">Selected stem</div>'
-                    f'<div class="selected-name">{selected_stem.capitalize()}</div>'
+            action, scope = st.columns([1, 1.15], gap="small", vertical_alignment="center")
+            with scope:
+                all_stems = st.checkbox(
+                    "Search all stem types",
+                    key=f"search_all_stems_{clip_key}",
+                    help="Include vocals, drums, bass, guitar, piano, and other stems in the results.",
+                    persist_state="session",
+                    wrap=True,
                 )
+            search_key = (clip_key, selected_stem, all_stems)
             with action:
                 if st.button("⌕  Find similar", key=f"search_button_{clip_key}", use_container_width=True):
                     with st.spinner("Extracting stem features and searching the index..."):
@@ -314,10 +356,12 @@ def show_results_panel(
     upload: UploadedAudio | None,
     selected_stem: str | None = None,
     results: list[SearchResult] | None = None,
+    *,
+    audio_id: str | None = None,
 ) -> None:
     with st.container(key="results_panel"):
         st.html('<div class="map-note">Visual map coming soon</div>')
-        title = escape(Path(upload.name).stem) if upload is not None else ""
+        title = escape(display_title(upload, audio_id)) if upload is not None and audio_id else ""
         heading = (
             f"Similar to: {title} - {selected_stem.capitalize()}"
             if selected_stem else "Similar sounds"
@@ -384,7 +428,8 @@ def main() -> None:
     with song:
         selected_stem, found = show_song_panel(uploads[selected_id], selected_id)
     with results:
-        show_results_panel(uploads[selected_id], selected_stem, found)
+        show_results_panel(uploads[selected_id], selected_stem, found, audio_id=selected_id)
+    install_stem_pane_resizer(open_pane=st.session_state.pop("open_stem_pane", False))
 
 
 if __name__ == "__main__":
